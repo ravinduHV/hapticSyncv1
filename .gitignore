@@ -1,0 +1,13 @@
+# Ignore the model directory
+/model
+
+# Python bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment directories
+venv
+ENV/
+env/
+*.venv/

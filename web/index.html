@@ -1,0 +1,767 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>BinaryBrains – Live Phoneme Monitor</title>
+<meta name="description" content="Real-time phoneme recognition dashboard — 2-minute rolling audio queue"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+/* ── Reset & tokens ─────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#05080f;
+  --bg1:#0b1121;
+  --bg2:#111827;
+  --bg3:rgba(255,255,255,.04);
+  --border:rgba(255,255,255,.07);
+  --border-hi:rgba(255,255,255,.14);
+  --cyan:#00d4ff;
+  --cyan-dim:rgba(0,212,255,.15);
+  --purple:#a855f7;
+  --purple-dim:rgba(168,85,247,.15);
+  --amber:#f59e0b;
+  --green:#10b981;
+  --blue:#3b82f6;
+  --red:#ef4444;
+  --text0:#e8f3fb;
+  --text1:#8faec8;
+  --text2:#3d5875;
+  --r:10px;
+  --r-sm:6px;
+  --shadow:0 4px 24px rgba(0,0,0,.5);
+}
+html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:'Inter',sans-serif;font-size:14px;line-height:1.5}
+::selection{background:var(--cyan-dim);color:var(--cyan)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:99px}
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+.app{display:grid;grid-template-rows:auto auto 1fr;height:100vh;overflow:hidden}
+.navbar{display:flex;align-items:center;gap:16px;padding:0 20px;height:56px;
+  background:rgba(11,17,33,.9);border-bottom:1px solid var(--border);
+  backdrop-filter:blur(12px);z-index:10}
+.ticker-bar{height:42px;background:var(--bg1);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;overflow:hidden;position:relative}
+.main{display:grid;grid-template-columns:1fr 320px;overflow:hidden;gap:0}
+.chunk-panel{overflow-y:auto;padding:14px}
+.stats-panel{background:var(--bg1);border-left:1px solid var(--border);overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+
+/* ── Navbar ─────────────────────────────────────────────────────────── */
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;white-space:nowrap}
+.logo-icon{width:28px;height:28px;border-radius:7px;
+  background:linear-gradient(135deg,var(--cyan),var(--purple));
+  display:flex;align-items:center;justify-content:center;font-size:14px}
+.nav-pill{display:flex;align-items:center;gap:7px;background:var(--bg3);
+  border:1px solid var(--border);border-radius:20px;padding:4px 12px;
+  font-size:12px;color:var(--text1)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text2);transition:background .3s}
+.dot.live{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.nav-stat{display:flex;flex-direction:column;align-items:center;line-height:1.2;padding:0 10px}
+.nav-stat-val{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--cyan)}
+.nav-stat-lbl{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em}
+.spacer{flex:1}
+.btn{background:var(--bg3);border:1px solid var(--border);color:var(--text0);
+  border-radius:var(--r-sm);padding:6px 14px;cursor:pointer;font-size:12px;
+  font-family:inherit;transition:all .2s}
+.btn:hover{background:var(--border-hi);border-color:var(--border-hi)}
+.btn.primary{background:linear-gradient(135deg,var(--cyan-dim),var(--purple-dim));
+  border-color:var(--cyan);color:var(--cyan)}
+.btn.primary:hover{background:linear-gradient(135deg,rgba(0,212,255,.25),rgba(168,85,247,.25))}
+
+/* ── Ticker ──────────────────────────────────────────────────────────── */
+.ticker-label{flex-shrink:0;padding:0 14px;font-size:10px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--text2);white-space:nowrap;
+  border-right:1px solid var(--border)}
+.ticker-scroll{flex:1;overflow:hidden;white-space:nowrap;padding:0 14px;
+  display:flex;align-items:center;gap:5px;position:relative}
+.ticker-inner{display:flex;gap:5px;align-items:center;transition:none}
+.t-ph{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;
+  font-size:12px;font-family:'JetBrains Mono',monospace;font-weight:500;
+  opacity:.9;flex-shrink:0}
+.t-sep{color:var(--text2);opacity:.4;flex-shrink:0;font-size:12px}
+
+/* ── Chunk cards ─────────────────────────────────────────────────────── */
+.chunks-header{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;padding:0 2px}
+.chunks-title{font-size:12px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text2)}
+.chunk-list{display:flex;flex-direction:column;gap:10px}
+
+.chunk-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);
+  overflow:hidden;transition:border-color .25s,box-shadow .25s;animation:slideIn .25s ease}
+.chunk-card:hover{border-color:var(--border-hi);box-shadow:var(--shadow)}
+.chunk-card.new-flash{animation:slideIn .25s ease,flashBorder .6s ease}
+@keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+@keyframes flashBorder{0%{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan-dim)}100%{border-color:var(--border);box-shadow:none}}
+
+.card-top{display:flex;align-items:center;gap:10px;padding:10px 14px 0}
+.card-idx{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text2);
+  background:var(--bg2);border-radius:4px;padding:2px 6px;flex-shrink:0}
+.card-time{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text1)}
+.card-inf{font-size:10px;color:var(--text2);margin-left:auto}
+.play-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);
+  background:var(--bg2);color:var(--text0);cursor:pointer;display:flex;
+  align-items:center;justify-content:center;font-size:11px;flex-shrink:0;
+  transition:all .2s}
+.play-btn:hover{background:var(--cyan-dim);border-color:var(--cyan);color:var(--cyan)}
+.play-btn.playing{background:var(--cyan-dim);border-color:var(--cyan);color:var(--cyan);
+  animation:pulse 1s infinite}
+
+.waveform-wrap{padding:8px 14px 0;position:relative}
+.waveform-canvas{width:100%;height:52px;display:block;border-radius:5px;
+  background:rgba(0,0,0,.3)}
+.wave-legend{display:flex;gap:12px;padding:3px 2px 0;font-size:10px;color:var(--text2)}
+.wave-legend span{display:flex;align-items:center;gap:4px}
+.wave-legend i{width:10px;height:2px;border-radius:1px;display:inline-block}
+.lc{background:var(--cyan)}
+.rc{background:var(--purple)}
+
+.phoneme-row{display:flex;flex-wrap:wrap;gap:5px;padding:10px 14px}
+.no-ph{font-size:11px;color:var(--text2);font-style:italic;padding:2px 0}
+
+.ph{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;
+  font-size:12px;font-family:'JetBrains Mono',monospace;font-weight:500;cursor:default}
+.ph:hover{filter:brightness(1.3)}
+/* Phoneme categories */
+.ph-vowel    {background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+.ph-stop     {background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
+.ph-fricative{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.3)}
+.ph-nasal    {background:rgba(168,85,247,.15);color:#c084fc;border:1px solid rgba(168,85,247,.3)}
+.ph-affricate{background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+.ph-other    {background:rgba(255,255,255,.06);color:var(--text1);border:1px solid var(--border)}
+
+.card-meta{display:flex;gap:12px;padding:6px 14px 10px;font-size:10px;color:var(--text2);
+  border-top:1px solid var(--border);margin-top:4px}
+.meta-ch{display:flex;flex-direction:column;gap:1px}
+.meta-label{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.meta-val{color:var(--text1);font-family:'JetBrains Mono',monospace}
+.rms-bar-wrap{display:flex;align-items:center;gap:5px;flex:1}
+.rms-bar-outer{flex:1;height:4px;background:var(--bg2);border-radius:2px;overflow:hidden}
+.rms-bar-inner{height:100%;border-radius:2px;transition:width .3s}
+.rms-l .rms-bar-inner{background:var(--cyan)}
+.rms-r .rms-bar-inner{background:var(--purple)}
+.load-more{width:100%;padding:10px;text-align:center;font-size:12px;color:var(--text1);
+  background:var(--bg3);border:1px dashed var(--border);border-radius:var(--r);
+  cursor:pointer;transition:all .2s}
+.load-more:hover{border-color:var(--border-hi);color:var(--text0)}
+
+/* ── Stats panel ─────────────────────────────────────────────────────── */
+.stat-section{display:flex;flex-direction:column;gap:8px}
+.stat-title{font-size:10px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--text2);border-bottom:1px solid var(--border);
+  padding-bottom:6px}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);
+  padding:10px;display:flex;flex-direction:column;gap:2px}
+.stat-box-val{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--cyan)}
+.stat-box-lbl{font-size:10px;color:var(--text2)}
+
+/* Queue fill meter */
+.queue-meter{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px}
+.queue-meter-top{display:flex;justify-content:space-between;margin-bottom:6px;font-size:11px}
+.queue-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.queue-fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--purple));
+  border-radius:3px;transition:width .4s ease}
+
+/* Top phonemes chart */
+.ph-bar-row{display:flex;align-items:center;gap:7px;font-size:11px}
+.ph-bar-label{width:36px;font-family:'JetBrains Mono',monospace;color:var(--text1);flex-shrink:0}
+.ph-bar-track{flex:1;height:12px;background:var(--bg2);border-radius:3px;overflow:hidden}
+.ph-bar-fill{height:100%;border-radius:3px;transition:width .4s ease}
+.ph-bar-count{width:28px;text-align:right;color:var(--text2);flex-shrink:0}
+
+/* Volume history */
+.vol-history{display:flex;align-items:flex-end;gap:1.5px;height:50px;padding:4px 0}
+.vol-bar{flex:1;border-radius:1px;min-height:2px;transition:height .2s}
+.vol-l{background:var(--cyan);opacity:.7}
+.vol-r{background:var(--purple);opacity:.7}
+
+/* Audio player overlay */
+.audio-toast{position:fixed;bottom:20px;right:20px;background:var(--bg1);
+  border:1px solid var(--border-hi);border-radius:var(--r);padding:12px 16px;
+  box-shadow:var(--shadow);display:none;align-items:center;gap:10px;z-index:100;
+  font-size:12px;min-width:220px}
+.audio-toast.visible{display:flex;animation:slideIn .2s ease}
+.audio-toast-info{flex:1}
+.audio-toast-ph{font-family:'JetBrains Mono',monospace;color:var(--cyan);font-size:11px}
+.audio-spinner{width:18px;height:18px;border:2px solid var(--border);
+  border-top-color:var(--cyan);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media(max-width:760px){
+  .main{grid-template-columns:1fr}
+  .stats-panel{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Navbar ──────────────────────────────────────────────────────────── -->
+  <nav class="navbar">
+    <div class="logo">
+      <div class="logo-icon">🧠</div>
+      BinaryBrains
+    </div>
+    <div class="nav-pill">
+      <div class="dot" id="dot"></div>
+      <span id="conn-label">Connecting…</span>
+    </div>
+    <div class="nav-stat">
+      <span class="nav-stat-val" id="ns-total">0</span>
+      <span class="nav-stat-lbl">Chunks</span>
+    </div>
+    <div class="nav-stat">
+      <span class="nav-stat-val" id="ns-ph">0</span>
+      <span class="nav-stat-lbl">Phonemes</span>
+    </div>
+    <div class="nav-stat">
+      <span class="nav-stat-val" id="ns-inf">—</span>
+      <span class="nav-stat-lbl">Inf ms</span>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" onclick="clearDisplay()">Clear Display</button>
+    <button class="btn primary" id="pause-btn" onclick="togglePause()">⏸ Pause</button>
+  </nav>
+
+  <!-- ── Live phoneme ticker ─────────────────────────────────────────────── -->
+  <div class="ticker-bar">
+    <div class="ticker-label">LIVE</div>
+    <div class="ticker-scroll" id="ticker-scroll">
+      <div class="ticker-inner" id="ticker-inner"></div>
+    </div>
+  </div>
+
+  <!-- ── Main content ────────────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- Chunk list -->
+    <div class="chunk-panel">
+      <div class="chunks-header">
+        <span class="chunks-title" id="list-label">Recent Chunks (0)</span>
+        <span style="font-size:11px;color:var(--text2)">Most recent first</span>
+      </div>
+      <div class="chunk-list" id="chunk-list">
+        <div style="text-align:center;padding:40px;color:var(--text2)">
+          Waiting for audio…
+        </div>
+      </div>
+      <div id="load-more" class="load-more" style="margin-top:10px;display:none"
+           onclick="loadMore()">
+        ↓ Load older chunks
+      </div>
+    </div>
+
+    <!-- Stats sidebar -->
+    <div class="stats-panel">
+
+      <div class="stat-section">
+        <div class="stat-title">Queue (2 min window)</div>
+        <div class="queue-meter">
+          <div class="queue-meter-top">
+            <span id="q-fill-label">0 / 240 chunks</span>
+            <span id="q-fill-pct" style="color:var(--cyan)">0%</span>
+          </div>
+          <div class="queue-track"><div class="queue-fill" id="q-fill" style="width:0%"></div></div>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <span class="stat-box-val" id="s-total">0</span>
+            <span class="stat-box-lbl">Total phonemes</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-box-val" id="s-sil">0%</span>
+            <span class="stat-box-lbl">Silence chunks</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-box-val" id="s-avg-inf">—</span>
+            <span class="stat-box-lbl">Avg inference</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-box-val" id="s-avg-rms" style="color:var(--purple)">—</span>
+            <span class="stat-box-lbl">Avg RMS (L)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-section">
+        <div class="stat-title">Top Phonemes (2 min)</div>
+        <div id="ph-chart" style="display:flex;flex-direction:column;gap:5px"></div>
+      </div>
+
+      <div class="stat-section">
+        <div class="stat-title">Volume History (L / R)</div>
+        <div class="vol-history" id="vol-history"></div>
+        <div style="display:flex;gap:10px;font-size:10px;color:var(--text2);margin-top:4px">
+          <span><span style="color:var(--cyan)">●</span> Left channel</span>
+          <span><span style="color:var(--purple)">●</span> Right channel</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Audio playback toast -->
+<div class="audio-toast" id="audio-toast">
+  <div class="audio-spinner" id="audio-spinner"></div>
+  <div class="audio-toast-info">
+    <div style="font-size:11px;color:var(--text1)" id="toast-id">—</div>
+    <div class="audio-toast-ph" id="toast-ph">—</div>
+  </div>
+  <button class="btn" onclick="stopToast()">✕</button>
+</div>
+
+<script>
+// ── Phoneme classification ────────────────────────────────────────────────
+const VOWELS     = new Set(['aa','ae','ah','aw','ay','eh','er','ey','ih','iy','ow','oy','uh','uw']);
+const STOPS      = new Set(['b','d','g','k','p','t','dx']);
+const FRICATIVES = new Set(['dh','f','s','sh','th','v','z']);
+const NASALS     = new Set(['m','n','ng']);
+const AFFRICATES = new Set(['ch','jh']);
+
+function phCat(p){
+  if(VOWELS.has(p))     return 'vowel';
+  if(STOPS.has(p))      return 'stop';
+  if(FRICATIVES.has(p)) return 'fricative';
+  if(NASALS.has(p))     return 'nasal';
+  if(AFFRICATES.has(p)) return 'affricate';
+  return 'other';
+}
+
+// Ticker colors match card pills
+const TICKER_BG = {
+  vowel:'rgba(245,158,11,.18)',stop:'rgba(59,130,246,.18)',
+  fricative:'rgba(16,185,129,.18)',nasal:'rgba(168,85,247,.18)',
+  affricate:'rgba(239,68,68,.18)',other:'rgba(255,255,255,.07)'
+};
+const TICKER_COL = {
+  vowel:'#f59e0b',stop:'#60a5fa',fricative:'#34d399',
+  nasal:'#c084fc',affricate:'#f87171',other:'#8faec8'
+};
+
+// ── State ─────────────────────────────────────────────────────────────────
+let queue        = [];     // full 2-min queue (JS mirror of server deque)
+let MAX_CHUNKS   = 240;
+let DISPLAY_MAX  = 50;     // cards shown in DOM at once
+let displayCount = 0;      // how many of queue[] we've rendered
+let paused       = false;
+let pendingChunks= [];     // buffered while paused
+let totalPh      = 0;
+let lastInfMs    = null;
+let volHistory   = [];     // [{rms_l, rms_r}] ring of 60 buckets
+let volBuckets   = 60;
+let audioCtx     = null;
+let currentSource= null;
+
+// ── Volume history helpers ───────────────────────────────────────────────
+function pushVol(chunk){
+  volHistory.push({l: chunk.rms_l, r: chunk.rms_r});
+  if(volHistory.length > volBuckets) volHistory.shift();
+  renderVolHistory();
+}
+
+function renderVolHistory(){
+  const el = document.getElementById('vol-history');
+  el.innerHTML='';
+  const maxRms = Math.max(...volHistory.map(v=>Math.max(v.l,v.r)), 0.001);
+  volHistory.forEach(v=>{
+    const wr = document.createElement('div');
+    wr.style.cssText='flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;align-items:center';
+    const bl = document.createElement('div');
+    bl.className='vol-bar vol-l';
+    bl.style.height=Math.max(2, (v.l/maxRms)*44)+'px';
+    const br = document.createElement('div');
+    br.className='vol-bar vol-r';
+    br.style.height=Math.max(2, (v.r/maxRms)*44)+'px';
+    wr.appendChild(bl); wr.appendChild(br);
+    el.appendChild(wr);
+  });
+}
+
+// ── Ticker ────────────────────────────────────────────────────────────────
+const TICKER_MAX = 120;
+let tickerPhonemes = [];
+
+function pushToTicker(phonemes){
+  if(!phonemes || phonemes.length === 0) return;
+  phonemes.forEach(p => tickerPhonemes.push(p));
+  while(tickerPhonemes.length > TICKER_MAX) tickerPhonemes.shift();
+  renderTicker();
+}
+
+function renderTicker(){
+  const inner = document.getElementById('ticker-inner');
+  inner.innerHTML = '';
+  tickerPhonemes.forEach((p,i) => {
+    const cat = phCat(p);
+    const span = document.createElement('span');
+    span.className = 't-ph';
+    span.style.background = TICKER_BG[cat];
+    span.style.color       = TICKER_COL[cat];
+    span.textContent = p;
+    inner.appendChild(span);
+    if(i < tickerPhonemes.length-1){
+      const sep = document.createElement('span');
+      sep.className = 't-sep';
+      sep.textContent = '·';
+      inner.appendChild(sep);
+    }
+  });
+  // scroll to end
+  const scroll = document.getElementById('ticker-scroll');
+  scroll.scrollLeft = scroll.scrollWidth;
+}
+
+// ── Waveform canvas ───────────────────────────────────────────────────────
+function drawWaveform(canvas, wL, wR){
+  const ctx = canvas.getContext('2d');
+  const W   = canvas.offsetWidth || 300;
+  const H   = canvas.height;
+  canvas.width = W;
+  ctx.clearRect(0,0,W,H);
+  ctx.lineWidth = 1.5;
+
+  // centre line
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+
+  function drawChannel(wave, color){
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    wave.forEach((v,i) => {
+      const x = (i/(wave.length-1))*W;
+      const y = H/2 - v*(H/2)*0.9;
+      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  }
+  drawChannel(wL, 'rgba(0,212,255,0.8)');
+  drawChannel(wR, 'rgba(168,85,247,0.7)');
+}
+
+// ── Phoneme pills HTML ────────────────────────────────────────────────────
+function pillsHTML(phonemes){
+  if(!phonemes || phonemes.length === 0)
+    return '<span class="no-ph">— silence —</span>';
+  return phonemes.map(p =>
+    `<span class="ph ph-${phCat(p)}" title="${phCat(p)}">${p}</span>`
+  ).join('');
+}
+
+// ── Format timestamp ──────────────────────────────────────────────────────
+function fmtTime(iso){
+  try{
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-GB',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})
+      + '.' + String(d.getMilliseconds()).padStart(3,'0');
+  }catch{return iso}
+}
+
+// ── RMS bar HTML ──────────────────────────────────────────────────────────
+function rmsBarHTML(val, cls){
+  const pct = Math.min(val/0.5*100, 100).toFixed(1);
+  return `<div class="rms-bar-wrap ${cls}">
+    <div class="rms-bar-outer"><div class="rms-bar-inner" style="width:${pct}%"></div></div>
+    <span style="font-size:10px;color:var(--text2);font-family:'JetBrains Mono',monospace;flex-shrink:0">${val.toFixed(3)}</span>
+  </div>`;
+}
+
+// ── Build one card element ─────────────────────────────────────────────────
+function buildCard(chunk){
+  const card = document.createElement('div');
+  card.className = 'chunk-card new-flash';
+  card.id = `card-${chunk.id}`;
+  card.dataset.audioUrl = chunk.audio_url;
+  card.dataset.phonemeStr = chunk.phoneme_str;
+
+  card.innerHTML = `
+    <div class="card-top">
+      <span class="card-idx">#${String(chunk.index).padStart(5,'0')}</span>
+      <span class="card-time">${fmtTime(chunk.timestamp)}</span>
+      <span class="card-inf">${chunk.inference_ms} ms</span>
+      <button class="play-btn" id="play-${chunk.id}" onclick="playChunk('${chunk.audio_url}','${chunk.id}','${chunk.phoneme_str}')" title="Play audio">▶</button>
+    </div>
+    <div class="waveform-wrap">
+      <canvas class="waveform-canvas" height="52" data-l='${JSON.stringify(chunk.waveform_l)}' data-r='${JSON.stringify(chunk.waveform_r)}'></canvas>
+      <div class="wave-legend">
+        <span><i class="lc"></i> Left</span>
+        <span style="margin-left:4px"><i class="rc"></i> Right</span>
+        <span style="margin-left:auto">${chunk.dom_freq_l.toFixed(0)} Hz</span>
+        <span style="margin-left:8px">${chunk.dom_freq_r.toFixed(0)} Hz</span>
+      </div>
+    </div>
+    <div class="phoneme-row">${pillsHTML(chunk.phonemes)}</div>
+    <div class="card-meta">
+      <div class="meta-ch" style="flex:1">
+        <span class="meta-label">L channel RMS</span>
+        ${rmsBarHTML(chunk.rms_l,'rms-l')}
+      </div>
+      <div style="width:1px;background:var(--border);margin:0 8px"></div>
+      <div class="meta-ch" style="flex:1">
+        <span class="meta-label">R channel RMS</span>
+        ${rmsBarHTML(chunk.rms_r,'rms-r')}
+      </div>
+    </div>`;
+
+  return card;
+}
+
+// ── Attach canvas waveforms after DOM insertion ───────────────────────────
+function attachWaveforms(container){
+  container.querySelectorAll('.waveform-canvas').forEach(canvas => {
+    try{
+      const wL = JSON.parse(canvas.dataset.l);
+      const wR = JSON.parse(canvas.dataset.r);
+      requestAnimationFrame(() => drawWaveform(canvas, wL, wR));
+    }catch(e){}
+  });
+}
+
+// ── Prepend a card to the top of the list ────────────────────────────────
+function prependCard(chunk){
+  const list = document.getElementById('chunk-list');
+  // Clear "waiting" placeholder if present
+  if(list.querySelector('[style*="padding:40px"]')) list.innerHTML='';
+
+  const card = buildCard(chunk);
+  list.insertBefore(card, list.firstChild);
+  attachWaveforms(card);
+
+  displayCount++;
+  // Trim excess DOM cards
+  while(displayCount > DISPLAY_MAX){
+    const last = list.lastChild;
+    if(last) list.removeChild(last);
+    displayCount--;
+  }
+  updateListLabel();
+}
+
+function updateListLabel(){
+  const total = queue.length;
+  document.getElementById('list-label').textContent =
+    `Chunks (${displayCount} shown / ${total} in queue)`;
+  document.getElementById('load-more').style.display =
+    displayCount < total ? 'block' : 'none';
+}
+
+// ── Load older chunks ─────────────────────────────────────────────────────
+function loadMore(){
+  const list   = document.getElementById('chunk-list');
+  const shown  = displayCount;
+  const older  = [...queue].reverse().slice(shown, shown + 20);
+  older.forEach(chunk => {
+    const card = buildCard(chunk);
+    card.classList.remove('new-flash');
+    list.appendChild(card);
+    attachWaveforms(card);
+    displayCount++;
+  });
+  updateListLabel();
+}
+
+// ── Render full queue snapshot (on initial connect) ──────────────────────
+function renderSnapshot(){
+  const list = document.getElementById('chunk-list');
+  list.innerHTML='';
+  displayCount = 0;
+  const recent = [...queue].reverse().slice(0, DISPLAY_MAX);
+  recent.forEach(chunk => {
+    const card = buildCard(chunk);
+    card.classList.remove('new-flash');
+    list.appendChild(card);
+    attachWaveforms(card);
+    displayCount++;
+  });
+  updateListLabel();
+}
+
+// ── Stats panel update ────────────────────────────────────────────────────
+let statsTimer = null;
+function scheduleStats(){ clearTimeout(statsTimer); statsTimer=setTimeout(fetchStats,200) }
+
+async function fetchStats(){
+  try{
+    const r = await fetch('/api/stats'); const d = await r.json();
+    document.getElementById('s-total').textContent   = d.total_phonemes;
+    document.getElementById('s-sil').textContent     = d.total_chunks>0
+      ? Math.round(d.empty_chunks/d.total_chunks*100)+'%' : '0%';
+    document.getElementById('s-avg-inf').textContent = d.avg_inf_ms.toFixed(0)+'ms';
+    document.getElementById('s-avg-rms').textContent = d.avg_rms_l.toFixed(3);
+
+    // Queue fill
+    const pct = MAX_CHUNKS>0 ? (d.total_chunks/MAX_CHUNKS*100).toFixed(0) : 0;
+    document.getElementById('q-fill-label').textContent = `${d.total_chunks} / ${MAX_CHUNKS} chunks`;
+    document.getElementById('q-fill-pct').textContent   = pct+'%';
+    document.getElementById('q-fill').style.width        = pct+'%';
+
+    // Phoneme chart
+    const chart = document.getElementById('ph-chart');
+    chart.innerHTML='';
+    const maxCount = d.top_phonemes.length>0 ? d.top_phonemes[0].count : 1;
+    d.top_phonemes.forEach(item => {
+      const cat  = phCat(item.phoneme);
+      const pct2 = (item.count/maxCount*100).toFixed(0);
+      const fillColor = TICKER_COL[cat];
+      chart.innerHTML += `<div class="ph-bar-row">
+        <span class="ph-bar-label">${item.phoneme}</span>
+        <div class="ph-bar-track"><div class="ph-bar-fill" style="width:${pct2}%;background:${fillColor}"></div></div>
+        <span class="ph-bar-count">${item.count}</span>
+      </div>`;
+    });
+  }catch(e){}
+}
+
+// ── Navbar counters ──────────────────────────────────────────────────────
+function updateNavCounters(){
+  document.getElementById('ns-total').textContent = queue.length;
+  document.getElementById('ns-ph').textContent    = totalPh;
+  if(lastInfMs !== null)
+    document.getElementById('ns-inf').textContent = lastInfMs.toFixed(0);
+}
+
+// ── Add incoming chunk to state & UI ────────────────────────────────────
+function ingestChunk(chunk){
+  queue.push(chunk);
+  if(queue.length > MAX_CHUNKS) queue.shift();
+  totalPh += chunk.phonemes.length;
+  lastInfMs = chunk.inference_ms;
+  pushToTicker(chunk.phonemes);
+  pushVol(chunk);
+  prependCard(chunk);
+  updateNavCounters();
+  scheduleStats();
+}
+
+// ── Pause / resume ────────────────────────────────────────────────────────
+function togglePause(){
+  paused = !paused;
+  const btn = document.getElementById('pause-btn');
+  btn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  btn.style.opacity = paused ? '0.6' : '1';
+  if(!paused){
+    pendingChunks.forEach(ingestChunk);
+    pendingChunks=[];
+  }
+}
+
+function clearDisplay(){
+  document.getElementById('chunk-list').innerHTML =
+    '<div style="text-align:center;padding:40px;color:var(--text2)">Display cleared — new chunks will appear shortly.</div>';
+  displayCount=0; updateListLabel();
+}
+
+// ── Audio playback ────────────────────────────────────────────────────────
+function ensureAudioCtx(){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
+
+async function playChunk(url, chunkId, phStr){
+  const toast   = document.getElementById('audio-toast');
+  const spinner = document.getElementById('audio-spinner');
+  const toastId = document.getElementById('toast-id');
+  const toastPh = document.getElementById('toast-ph');
+  const btn     = document.getElementById('play-'+chunkId);
+
+  if(currentSource){ try{ currentSource.stop(); }catch(e){} currentSource=null; }
+  document.querySelectorAll('.play-btn').forEach(b=>{ b.textContent='▶'; b.classList.remove('playing'); });
+
+  toastId.textContent = '#'+chunkId;
+  toastPh.textContent = phStr || '— silence —';
+  spinner.style.display='block';
+  toast.classList.add('visible');
+  if(btn){ btn.textContent='⏳'; btn.classList.add('playing'); }
+
+  try{
+    const ctx  = ensureAudioCtx();
+    const resp = await fetch(url);
+    const buf  = await resp.arrayBuffer();
+    const audio= await ctx.decodeAudioData(buf);
+    const src  = ctx.createBufferSource();
+    src.buffer = audio;
+    src.connect(ctx.destination);
+    src.start(0);
+    currentSource = src;
+    spinner.style.display='none';
+    if(btn){ btn.textContent='🔊'; }
+    src.onended = () => {
+      currentSource = null;
+      if(btn){ btn.textContent='▶'; btn.classList.remove('playing'); }
+      toast.classList.remove('visible');
+    };
+  }catch(e){
+    console.error('playback error', e);
+    if(btn){ btn.textContent='▶'; btn.classList.remove('playing'); }
+    toast.classList.remove('visible');
+  }
+}
+
+function stopToast(){
+  if(currentSource){ try{ currentSource.stop(); }catch(e){} currentSource=null; }
+  document.getElementById('audio-toast').classList.remove('visible');
+  document.querySelectorAll('.play-btn').forEach(b=>{ b.textContent='▶'; b.classList.remove('playing'); });
+}
+
+// ── Socket.IO ─────────────────────────────────────────────────────────────
+const socket = io({ transports:['websocket','polling'] });
+
+socket.on('connect', () => {
+  document.getElementById('dot').classList.add('live');
+  document.getElementById('conn-label').textContent = 'Live';
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('dot').classList.remove('live');
+  document.getElementById('conn-label').textContent = 'Disconnected';
+});
+
+socket.on('queue_snapshot', data => {
+  MAX_CHUNKS = data.max;
+  queue      = data.chunks;
+  totalPh    = queue.reduce((s,c)=>s+c.phonemes.length, 0);
+  // Rebuild ticker from recent chunks
+  const recent = queue.slice(-30);
+  tickerPhonemes = [];
+  recent.forEach(c => c.phonemes.forEach(p => tickerPhonemes.push(p)));
+  renderTicker();
+  // Volume history from all chunks
+  queue.forEach(c => { volHistory.push({l:c.rms_l,r:c.rms_r}); });
+  while(volHistory.length > volBuckets) volHistory.shift();
+  renderVolHistory();
+  renderSnapshot();
+  updateNavCounters();
+  fetchStats();
+});
+
+socket.on('new_chunk', chunk => {
+  if(paused){ pendingChunks.push(chunk); return; }
+  ingestChunk(chunk);
+});
+
+// ── Redraw canvases on window resize ─────────────────────────────────────
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    document.querySelectorAll('.waveform-canvas').forEach(canvas => {
+      try{
+        const wL = JSON.parse(canvas.dataset.l);
+        const wR = JSON.parse(canvas.dataset.r);
+        drawWaveform(canvas, wL, wR);
+      }catch(e){}
+    });
+  }, 200);
+});
+</script>
+</body>
+</html>
