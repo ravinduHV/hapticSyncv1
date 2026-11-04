@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 audio_server.py
 ===============
@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+import torch
 from flask import Flask, jsonify, send_file
 from flask_socketio import SocketIO, emit
 
@@ -92,17 +93,24 @@ def _downsample(signal, n):
     return signal[idx].tolist()
 
 
+def _sync():
+    """Ensure GPU tasks finish before stopping the timer if CUDA is used."""
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 def _dominant_freq(signal):
     from scipy.fft import fft, fftfreq
     n  = len(signal)
     if n == 0:
         return 0.0
+    signal = signal - np.mean(signal)  # Remove DC offset
     yf = np.abs(fft(signal))[: n // 2]
     xf = fftfreq(n, 1.0 / SAMPLE_RATE)[: n // 2]
-    return float(xf[np.argmax(yf)])
+    return float(xf[np.argmax(yf)]) if len(yf) > 0 else 0.0
 
 
-def _build_record(index, audio, phonemes, inference_ms):
+def _build_record(index, audio, phonemes, timing, dom_freq_l, dom_freq_r):
     """Turn a raw audio array + phoneme list into the JSON-safe dict."""
     left  = audio[:, 0]
     right = audio[:, 1]
@@ -126,9 +134,10 @@ def _build_record(index, audio, phonemes, inference_ms):
         "rms_r":        float(np.sqrt(np.mean(right ** 2))),
         "peak_l":       float(np.max(np.abs(left))),
         "peak_r":       float(np.max(np.abs(right))),
-        "dom_freq_l":   _dominant_freq(left),
-        "dom_freq_r":   _dominant_freq(right),
-        "inference_ms": round(inference_ms, 1),
+        "dom_freq_l":   dom_freq_l,
+        "dom_freq_r":   dom_freq_r,
+        "inference_ms": timing["compute"],
+        "timing":       timing,
         "waveform_l":   _downsample(left,  WAVEFORM_POINTS),
         "waveform_r":   _downsample(right, WAVEFORM_POINTS),
         "audio_url":    f"/api/audio/{chunk_id}",
@@ -140,15 +149,23 @@ def _build_record(index, audio, phonemes, inference_ms):
 # Recording / inference loop  (runs in its own daemon thread)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _recording_loop(device, model):
+def _recording_loop(device, model_wrapper):
     global _chunk_counter, _server_running
+
+    torch_model = model_wrapper.model
+    processor = model_wrapper.processor
+    id2phoneme = model_wrapper.id2phoneme
+    torch_device = next(torch_model.parameters()).device
 
     print(f"[server] Recording loop started  |  device={device!r}  "
           f"|  chunk={DURATION}s  |  queue={MAX_CHUNKS} chunks ({QUEUE_SECONDS}s)")
 
     while _server_running:
         try:
-            # ── Record one chunk ─────────────────────────────────────────
+            t_chunk_start = time.perf_counter()
+
+            # ── Step 1: Record one chunk ─────────────────────────────────
+            t0 = time.perf_counter()
             n_frames = int(SAMPLE_RATE * DURATION)
             audio = sd.rec(
                 n_frames,
@@ -158,15 +175,63 @@ def _recording_loop(device, model):
                 device     = device,
             )
             sd.wait()
+            t1 = time.perf_counter()
+            t_record = (t1 - t0) * 1000
 
-            # ── Phoneme inference ────────────────────────────────────────
+            # ── Step 2: Stereo -> Mono Preprocessing ─────────────────────
+            t0 = time.perf_counter()
             mono = np.mean(audio, axis=1)
-            t0   = time.perf_counter()
-            phonemes = model.predict(mono)
-            inf_ms   = (time.perf_counter() - t0) * 1000
+            t1 = time.perf_counter()
+            t_preprocess = (t1 - t0) * 1000
+
+            # ── Step 3: Spectral & Frequency Analysis (FFT) ──────────────
+            t0 = time.perf_counter()
+            left = audio[:, 0]
+            right = audio[:, 1]
+            dom_freq_l = _dominant_freq(left)
+            dom_freq_r = _dominant_freq(right)
+            t1 = time.perf_counter()
+            t_fft = (t1 - t0) * 1000
+
+            # ── Step 4: Wav2Vec2 Feature Processor ───────────────────────
+            t0 = time.perf_counter()
+            inputs = processor(mono, sampling_rate=SAMPLE_RATE, return_tensors="pt")
+            input_values = inputs.input_values.to(torch_device)
+            _sync()
+            t1 = time.perf_counter()
+            t_processor = (t1 - t0) * 1000
+
+            # ── Step 5: Model Forward Pass ───────────────────────────────
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                logits = torch_model(input_values).logits
+            _sync()
+            t1 = time.perf_counter()
+            t_forward = (t1 - t0) * 1000
+
+            # ── Step 6: CTC Greedy Decoding ──────────────────────────────
+            t0 = time.perf_counter()
+            pred_ids = torch.argmax(logits, dim=-1)[0]
+            phonemes = [id2phoneme.get(int(i), "[UNK]") for i in pred_ids if int(i) not in [0, 41]]
+            t1 = time.perf_counter()
+            t_decode = (t1 - t0) * 1000
+
+            t_compute = t_preprocess + t_fft + t_processor + t_forward + t_decode
+            t_total = (time.perf_counter() - t_chunk_start) * 1000
+
+            timing = {
+                "record": round(t_record, 1),
+                "preprocess": round(t_preprocess, 2),
+                "fft": round(t_fft, 2),
+                "processor": round(t_processor, 2),
+                "forward": round(t_forward, 1),
+                "decode": round(t_decode, 2),
+                "compute": round(t_compute, 1),
+                "total": round(t_total, 1),
+            }
 
             _chunk_counter += 1
-            record = _build_record(_chunk_counter, audio, phonemes, inf_ms)
+            record = _build_record(_chunk_counter, audio, phonemes, timing, dom_freq_l, dom_freq_r)
 
             # ── Add to rolling queue; collect evicted item ───────────────
             evicted = None
@@ -189,7 +254,7 @@ def _recording_loop(device, model):
             socketio.emit("new_chunk", public)
 
             print(f"[server] Chunk #{_chunk_counter:05d}  "
-                  f"phonemes={phonemes}  inf={inf_ms:.0f}ms")
+                  f"phonemes={phonemes}  compute={t_compute:.1f}ms  total={t_total:.1f}ms")
 
         except Exception as exc:
             print(f"[server] ERROR in recording loop: {exc}", file=sys.stderr)
@@ -240,6 +305,13 @@ def api_stats():
     for p in all_ph:
         freq[p] = freq.get(p, 0) + 1
     top = sorted(freq.items(), key=lambda x: -x[1])[:12]
+
+    avg_timing = {}
+    if q:
+        for k in ["record", "preprocess", "fft", "processor", "forward", "decode", "compute", "total"]:
+            vals = [item["timing"][k] for item in q if "timing" in item and k in item["timing"]]
+            avg_timing[k] = round(float(np.mean(vals)), 2) if vals else 0.0
+
     return jsonify({
         "total_chunks":   len(q),
         "max_chunks":     MAX_CHUNKS,
@@ -249,6 +321,7 @@ def api_stats():
         "avg_rms_l":      float(np.mean([i["rms_l"] for i in q])) if q else 0.0,
         "avg_rms_r":      float(np.mean([i["rms_r"] for i in q])) if q else 0.0,
         "avg_inf_ms":     float(np.mean([i["inference_ms"] for i in q])) if q else 0.0,
+        "avg_timing":     avg_timing,
     })
 
 
@@ -326,6 +399,15 @@ def main():
         print(f"[server] Input device [{device}]: {sd.query_devices(device)['name']}")
     else:
         print("[server] Using system default input device.")
+
+    if device is not None:
+        try:
+            sd.default.device = (device, device)
+            sd.default.samplerate = SAMPLE_RATE
+            sd.default.channels = CHANNELS
+            sd.default.dtype = DTYPE
+        except Exception:
+            pass
 
     # ── Load model ───────────────────────────────────────────────────────
     print("[server] Loading phoneme recognition model …")

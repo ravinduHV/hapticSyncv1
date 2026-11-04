@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -145,6 +145,26 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:'Inte
 .rms-bar-inner{height:100%;border-radius:2px;transition:width .3s}
 .rms-l .rms-bar-inner{background:var(--cyan)}
 .rms-r .rms-bar-inner{background:var(--purple)}
+
+/* Step timing breakdown chips on card */
+.card-timings{display:flex;flex-wrap:wrap;gap:4px;padding:6px 14px 8px;background:rgba(0,0,0,.15);
+  border-top:1px solid var(--border);border-bottom-left-radius:var(--r);border-bottom-right-radius:var(--r)}
+.timing-badge{display:inline-flex;align-items:center;gap:3px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:4px;padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text2);cursor:default}
+.timing-badge b{color:var(--text1);font-weight:600}
+.timing-badge.highlight{border-color:rgba(34,211,238,.3);background:rgba(34,211,238,.08)}
+.timing-badge.highlight b{color:var(--cyan)}
+.timing-badge.fwd{border-color:rgba(168,85,247,.3);background:rgba(168,85,247,.08)}
+.timing-badge.fwd b{color:var(--purple)}
+
+/* Step latency panel in sidebar */
+.timing-list{display:flex;flex-direction:column;gap:5px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r-sm);padding:8px 10px}
+.timing-row{display:flex;justify-content:space-between;align-items:center;font-size:11px}
+.timing-row-lbl{color:var(--text2);display:flex;align-items:center;gap:6px}
+.timing-row-val{font-family:'JetBrains Mono',monospace;color:var(--cyan);font-weight:600}
+.timing-divider{height:1px;background:var(--border);margin:3px 0}
+
 .load-more{width:100%;padding:10px;text-align:center;font-size:12px;color:var(--text1);
   background:var(--bg3);border:1px dashed var(--border);border-radius:var(--r);
   cursor:pointer;transition:all .2s}
@@ -223,7 +243,11 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:'Inte
     </div>
     <div class="nav-stat">
       <span class="nav-stat-val" id="ns-inf">—</span>
-      <span class="nav-stat-lbl">Inf ms</span>
+      <span class="nav-stat-lbl">Compute ms</span>
+    </div>
+    <div class="nav-stat">
+      <span class="nav-stat-val" id="ns-tot">—</span>
+      <span class="nav-stat-lbl">Total ms</span>
     </div>
     <div class="spacer"></div>
     <button class="btn" onclick="clearDisplay()">Clear Display</button>
@@ -287,6 +311,21 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:'Inte
             <span class="stat-box-val" id="s-avg-rms" style="color:var(--purple)">—</span>
             <span class="stat-box-lbl">Avg RMS (L)</span>
           </div>
+        </div>
+      </div>
+
+      <div class="stat-section">
+        <div class="stat-title">Step Latency Breakdown (Avg)</div>
+        <div class="timing-list" id="timing-list">
+          <div class="timing-row"><span class="timing-row-lbl">🎙️ 1. Audio Record (wait)</span><span class="timing-row-val" id="st-rec">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🔀 2. Stereo → Mono</span><span class="timing-row-val" id="st-pre">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">⚡ 3. Dual FFT Analysis</span><span class="timing-row-val" id="st-fft">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🧬 4. Feature Processor</span><span class="timing-row-val" id="st-proc">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🧠 5. Model Forward Pass</span><span class="timing-row-val" id="st-fwd">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🔤 6. CTC Greedy Decode</span><span class="timing-row-val" id="st-dec">—</span></div>
+          <div class="timing-divider"></div>
+          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⚡ Pure Compute (2-6)</span><span class="timing-row-val" id="st-comp" style="color:var(--cyan)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⏱️ Total Turnaround</span><span class="timing-row-val" id="st-tot" style="color:var(--purple)">—</span></div>
         </div>
       </div>
 
@@ -483,11 +522,17 @@ function buildCard(chunk){
   card.dataset.audioUrl = chunk.audio_url;
   card.dataset.phonemeStr = chunk.phoneme_str;
 
+  const t = chunk.timing || {
+    record: 500.0, preprocess: 0.1, fft: 0.4, processor: 1.2,
+    forward: chunk.inference_ms || 15.0, decode: 0.2,
+    compute: chunk.inference_ms || 16.9, total: (chunk.inference_ms || 16.9) + 500.0
+  };
+
   card.innerHTML = `
     <div class="card-top">
       <span class="card-idx">#${String(chunk.index).padStart(5,'0')}</span>
       <span class="card-time">${fmtTime(chunk.timestamp)}</span>
-      <span class="card-inf">${chunk.inference_ms} ms</span>
+      <span class="card-inf" title="Compute: ${t.compute} ms | Total: ${t.total} ms">⚡ ${t.compute} ms</span>
       <button class="play-btn" id="play-${chunk.id}" onclick="playChunk('${chunk.audio_url}','${chunk.id}','${chunk.phoneme_str}')" title="Play audio">▶</button>
     </div>
     <div class="waveform-wrap">
@@ -510,6 +555,15 @@ function buildCard(chunk){
         <span class="meta-label">R channel RMS</span>
         ${rmsBarHTML(chunk.rms_r,'rms-r')}
       </div>
+    </div>
+    <div class="card-timings">
+      <span class="timing-badge" title="Step 1: Audio record buffer wait">🎙️ Rec: <b>${t.record}ms</b></span>
+      <span class="timing-badge" title="Step 2: Stereo to mono preprocessing">🔀 Pre: <b>${t.preprocess}ms</b></span>
+      <span class="timing-badge" title="Step 3: Dual FFT spectral analysis">⚡ FFT: <b>${t.fft}ms</b></span>
+      <span class="timing-badge" title="Step 4: Wav2Vec2 feature extraction">🧬 Proc: <b>${t.processor}ms</b></span>
+      <span class="timing-badge fwd" title="Step 5: Model forward pass (neural network)">🧠 Model: <b>${t.forward}ms</b></span>
+      <span class="timing-badge" title="Step 6: CTC greedy decoding">🔤 CTC: <b>${t.decode}ms</b></span>
+      <span class="timing-badge highlight" style="margin-left:auto" title="Pure Compute Latency (Steps 2-6)">⚡ Comp: <b>${t.compute}ms</b></span>
     </div>`;
 
   return card;
@@ -618,19 +672,40 @@ async function fetchStats(){
         <span class="ph-bar-count">${item.count}</span>
       </div>`;
     });
+
+    // Step latency breakdown
+    if(d.avg_timing){
+      const at = d.avg_timing;
+      if(document.getElementById('st-rec')) document.getElementById('st-rec').textContent = at.record ? at.record.toFixed(1)+'ms' : '—';
+      if(document.getElementById('st-pre')) document.getElementById('st-pre').textContent = at.preprocess ? at.preprocess.toFixed(2)+'ms' : '—';
+      if(document.getElementById('st-fft')) document.getElementById('st-fft').textContent = at.fft ? at.fft.toFixed(2)+'ms' : '—';
+      if(document.getElementById('st-proc')) document.getElementById('st-proc').textContent = at.processor ? at.processor.toFixed(2)+'ms' : '—';
+      if(document.getElementById('st-fwd')) document.getElementById('st-fwd').textContent = at.forward ? at.forward.toFixed(1)+'ms' : '—';
+      if(document.getElementById('st-dec')) document.getElementById('st-dec').textContent = at.decode ? at.decode.toFixed(2)+'ms' : '—';
+      if(document.getElementById('st-comp')) document.getElementById('st-comp').textContent = at.compute ? at.compute.toFixed(1)+'ms' : '—';
+      if(document.getElementById('st-tot')) document.getElementById('st-tot').textContent = at.total ? at.total.toFixed(1)+'ms' : '—';
+    }
   }catch(e){}
 }
+
+let lastChunk = null;
 
 // ── Navbar counters ──────────────────────────────────────────────────────
 function updateNavCounters(){
   document.getElementById('ns-total').textContent = queue.length;
   document.getElementById('ns-ph').textContent    = totalPh;
-  if(lastInfMs !== null)
+  if(lastChunk && lastChunk.timing){
+    document.getElementById('ns-inf').textContent = lastChunk.timing.compute.toFixed(0);
+    document.getElementById('ns-tot').textContent = lastChunk.timing.total.toFixed(0);
+  } else if(lastInfMs !== null){
     document.getElementById('ns-inf').textContent = lastInfMs.toFixed(0);
+    document.getElementById('ns-tot').textContent = '—';
+  }
 }
 
 // ── Add incoming chunk to state & UI ────────────────────────────────────
 function ingestChunk(chunk){
+  lastChunk = chunk;
   queue.push(chunk);
   if(queue.length > MAX_CHUNKS) queue.shift();
   totalPh += chunk.phonemes.length;
