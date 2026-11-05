@@ -12,3 +12,4 @@ ENV/
 env/
 *.venv/
 */build
+*/chunk_cache
