@@ -9,11 +9,13 @@ echo "  Haptic-Sync RT Platform Setup (Raspberry Pi 5)"
 echo "=========================================================="
 
 # 1. Verify PREEMPT_RT kernel
-if [ ! -f /sys/kernel/realtime ] || [ "$(cat /sys/kernel/realtime)" != "1" ]; then
-    echo "WARNING: Kernel does not report PREEMPT_RT (/sys/kernel/realtime != 1)"
-    uname -a
+if [ -f /sys/kernel/realtime ] && [ "$(cat /sys/kernel/realtime 2>/dev/null)" = "1" ]; then
+    echo "[OK] PREEMPT_RT kernel confirmed via /sys/kernel/realtime: $(uname -r)"
+elif uname -v | grep -q "PREEMPT_RT" || uname -a | grep -q "PREEMPT_RT"; then
+    echo "[OK] PREEMPT_RT kernel confirmed via uname: $(uname -r)"
 else
-    echo "[OK] PREEMPT_RT kernel confirmed: $(uname -r)"
+    echo "WARNING: Kernel does not appear to be PREEMPT_RT"
+    uname -a
 fi
 
 # 2. Set CPU governor to 'performance' on all cores (0-3)
@@ -61,14 +63,15 @@ else
     echo "Audio IRQ not identified in /proc/interrupts; will rely on CPU pinning."
 fi
 
-# 6. Setup cgroup v2 / cpuset isolation
+# 6. Setup cgroup v2 / cpuset isolation (optional, taskset is primary)
 CG_DIR="/sys/fs/cgroup/hapticsync"
 if [ -d /sys/fs/cgroup ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     echo "Configuring cgroup v2 cpusets..."
-    mkdir -p "$CG_DIR" || true
+    mkdir -p "$CG_DIR" 2>/dev/null || true
     echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+    echo "+cpuset" > "$CG_DIR/cgroup.subtree_control" 2>/dev/null || true
 
-    mkdir -p "$CG_DIR/housekeeping" "$CG_DIR/rt-capture" "$CG_DIR/rt-model" "$CG_DIR/rt-post" || true
+    mkdir -p "$CG_DIR/housekeeping" "$CG_DIR/rt-capture" "$CG_DIR/rt-model" "$CG_DIR/rt-post" 2>/dev/null || true
 
     echo 0 > "$CG_DIR/housekeeping/cpuset.cpus" 2>/dev/null || true
     echo 1 > "$CG_DIR/rt-capture/cpuset.cpus" 2>/dev/null || true

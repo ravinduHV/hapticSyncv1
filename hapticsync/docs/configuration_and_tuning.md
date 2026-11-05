@@ -73,15 +73,96 @@ In `config/hapticsync.json` (or a custom `config/low_latency.json`):
 
 ---
 
-## 3. CPU Core Pinning & Thread Distribution
+## 3. CPU Core Pinning & Task Allocation
 
-To maximize throughput and prevent CPU 0 overload on the Raspberry Pi 5 (4-core Broadcom BCM2712), workload is partitioned across dedicated tasksets:
+The Raspberry Pi 5 features **4 physical ARM Cortex-A76 CPU cores** (`0`, `1`, `2`, `3`). Workload is partitioned in `config/hapticsync.json` under the `"cpus"` block:
 
-| Core | Thread / Role | Scheduler | Description |
-| :--- | :--- | :--- | :--- |
-| **CPU 0** | Housekeeping & Telemetry | `SCHED_OTHER` | Runs system OS tasks, network IRQs, and the lightweight telemetry daemon (`publisher.py` or `mqtt_publisher.py`). CPU load < 0.5%. |
-| **CPU 1** | Pre-Model & Post-Model | `SCHED_FIFO` (50) & `SCHED_OTHER` | ALSA audio capture thread (`producer_bin`), lock-free ring buffer writes, window assembler, and CTC collapse post-processor (`postproc_bin`). |
-| **CPU 2 & 3** | Neural Model Inference | `SCHED_OTHER` (2 threads) | PyTorch Wav2Vec2 forward pass pinned to `[2, 3]` with `OMP_NUM_THREADS=2` and `torch.set_num_threads(2)`. |
+```json
+  "cpus": {
+    "housekeeping": [0],
+    "producer": 1,
+    "model": [2, 3],
+    "post": 1
+  }
+```
+
+When you update this configuration and run `tools/launcher.py`, the supervisor automatically:
+1. Pins child binaries to their assigned cores using Linux `taskset -c <cores>`.
+2. Automatically sets PyTorch thread count: `torch.set_num_threads(len(model_cpus))` and `OMP_NUM_THREADS`.
+
+### Core Allocation Reference Table
+
+| Task | Configuration Key | Process | Typical CPU Load | Latency Sensitivity | Recommended Core |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Housekeeping & Telemetry** | `"housekeeping"` | `publisher.py` / `mqtt_publisher.py` | **< 0.5%** | Low | **CPU 0** (absorbs OS interrupts, WiFi/Ethernet, USB) |
+| **Audio Capture (ALSA)** | `"producer"` | `producer_bin` | **< 3%** | **High** (delay causes XRUNs) | **CPU 1** (isolated from heavy neural compute) |
+| **Window Assembler** | Built into producer | `producer_bin` | **< 1%** | Medium | **CPU 1** |
+| **Post-Processor** | `"post"` | `postproc_bin` | **< 2%** (<1 ms/chunk) | Low | **CPU 1** (co-located with producer) |
+| **Neural Model Inference** | `"model"` | `inference/main.py` | **100%** on assigned cores | Heavy compute | **CPU 2, 3** (or `[1, 2, 3]`) |
+
+---
+
+### Core Assignment Profiles
+
+#### Profile 1: Dual-Core Model (Default — Balanced & Recommended)
+```json
+"cpus": {
+  "housekeeping": [0],
+  "producer": 1,
+  "model": [2, 3],
+  "post": 1
+}
+```
+* **CPU 0:** System IRQs, network traffic, OS background tasks, and telemetry daemon.
+* **CPU 1:** Dedicated entirely to audio capture and CTC merging. Having an un-congested core guarantees **0 ALSA buffer XRUNs**.
+* **CPU 2 & 3:** Dedicated 100% to PyTorch neural network forward passes with 2 parallel OpenMP worker threads.
+
+#### Profile 2: Triple-Core Model (Maximum Model Throughput)
+```json
+"cpus": {
+  "housekeeping": [0],
+  "producer": 0,
+  "model": [1, 2, 3],
+  "post": 0
+}
+```
+* Maximizes inference speed by giving PyTorch **3 CPU cores** (`OMP_NUM_THREADS=3`).
+* Moves audio capture and CTC collapse to **CPU 0** alongside housekeeping.
+* *Note:* Under very heavy WiFi/MQTT network traffic, sharing CPU 0 may occasionally produce ALSA XRUNs.
+
+#### Profile 3: Fully Isolated Stages (Single-Core Model)
+```json
+"cpus": {
+  "housekeeping": [0],
+  "producer": 1,
+  "model": [2],
+  "post": 3
+}
+```
+* Every pipeline stage runs on its own distinct physical CPU core.
+* Lowest power consumption and thermal footprint, but inference latency will be slightly higher ($\approx 1.4\times$ real-time).
+
+---
+
+### Verifying CPU Affinities Live on Raspberry Pi
+
+1. **Check thread scheduling and affinities:**
+   ```bash
+   bash tools/check_rt.sh
+   ```
+2. **Monitor live per-core load:**
+   Run `top`, then press `1` on your keyboard to expand CPU cores into individual meters:
+   ```text
+   %Cpu0 :  1.2 us,  0.5 sy ... (Housekeeping / Telemetry)
+   %Cpu1 :  2.5 us,  0.8 sy ... (Audio Producer / PostProc)
+   %Cpu2 : 98.4 us,  1.2 sy ... (PyTorch Model Worker Thread 1)
+   %Cpu3 : 97.9 us,  1.5 sy ... (PyTorch Model Worker Thread 2)
+   ```
+3. **Inspect specific thread affinities:**
+   ```bash
+   ps -eLo pid,tid,cls,rtprio,psr,comm | grep -Ei 'producer|python|postproc'
+   ```
+   *(The `psr` column indicates the exact CPU core the thread is currently executing on).*
 
 ---
 

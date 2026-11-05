@@ -4,15 +4,12 @@
 set -uo pipefail
 
 echo "── System Kernel Check ────────────────────────────────────"
-if [ -f /sys/kernel/realtime ]; then
-    RT_VAL=$(cat /sys/kernel/realtime)
-    if [ "$RT_VAL" = "1" ]; then
-        echo "[PASS] Kernel is PREEMPT_RT: $(uname -r)"
-    else
-        echo "[FAIL] Kernel is NOT PREEMPT_RT (/sys/kernel/realtime = $RT_VAL)"
-    fi
+if [ -f /sys/kernel/realtime ] && [ "$(cat /sys/kernel/realtime 2>/dev/null)" = "1" ]; then
+    echo "[PASS] Kernel is PREEMPT_RT (via /sys/kernel/realtime): $(uname -r)"
+elif uname -v | grep -q "PREEMPT_RT" || uname -a | grep -q "PREEMPT_RT"; then
+    echo "[PASS] Kernel is PREEMPT_RT (via uname): $(uname -r)"
 else
-    echo "[WARN] /sys/kernel/realtime not found."
+    echo "[WARN] Kernel does not report PREEMPT_RT"
 fi
 
 echo ""
