@@ -349,12 +349,16 @@ def main():
     print(f"  Broker: {BROKER_HOST}:{BROKER_PORT} | CPU: 0")
     print("==========================================================")
 
-    # Initialize MQTT client
+    # Initialize MQTT client with Last Will and Testament (LWT)
     client = mqtt.Client(client_id="hapticsync_rpi5", clean_session=True)
+    client.will_set("hapticsync/status", json.dumps({"online": False}), qos=1, retain=True)
 
     def on_connect(c, userdata, flags, rc):
         if rc == 0:
             print(f"[mqtt_publisher] Connected to MQTT broker at {BROKER_HOST}:{BROKER_PORT}")
+            c.publish("hapticsync/status", json.dumps({"online": True}), qos=1, retain=True)
+            # Clear any previously retained pipeline_update ghost data
+            c.publish("hapticsync/pipeline_update", b"", qos=0, retain=True)
         else:
             print(f"[mqtt_publisher] Connection failed with code {rc}")
 
@@ -427,8 +431,8 @@ def main():
                     "waveform": wf_preview,
                 }
                 try:
-                    client.publish("hapticsync/pipeline_update", json.dumps(pipeline_payload), qos=0, retain=True)
-                    client.publish("hapticsync/stats", json.dumps(st), qos=0)
+                    client.publish("hapticsync/pipeline_update", json.dumps(pipeline_payload), qos=0, retain=False)
+                    client.publish("hapticsync/stats", json.dumps(st), qos=0, retain=False)
                 except Exception:
                     pass
 
@@ -438,6 +442,10 @@ def main():
         print("\n[mqtt_publisher] Shutting down...")
     finally:
         try:
+            # Publish offline status and clear any retained update
+            client.publish("hapticsync/status", json.dumps({"online": False}), qos=1, retain=True)
+            client.publish("hapticsync/pipeline_update", b"", qos=0, retain=True)
+            time.sleep(0.2)
             client.loop_stop()
             client.disconnect()
         except Exception:

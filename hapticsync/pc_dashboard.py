@@ -61,10 +61,24 @@ _queue = collections.deque(maxlen=MAX_CHUNKS)
 _latest_pipeline_data = {}
 _lock = threading.Lock()
 _connected_to_rpi = False
+_last_packet_time = 0.0
 
 # Uptime tracking: store first-seen RPi monotonic start_ns alongside PC wall time
 _rpi_start_ns   = [0]      # list so it's mutable from nested scope
 _rpi_start_wall = [0.0]    # time.time() when we first saw the pipeline's start_ns
+
+
+def connection_watchdog_loop():
+    """Monitors telemetry packet arrival. If no packet for >3s, marks pipeline offline."""
+    global _connected_to_rpi
+    while True:
+        time.sleep(1.0)
+        with _lock:
+            if _last_packet_time > 0 and (time.time() - _last_packet_time > 3.5):
+                if _connected_to_rpi:
+                    _connected_to_rpi = False
+                    print("[pc_dashboard] No telemetry from Raspberry Pi for >3.5s — marked as OFFLINE.")
+                    socketio.emit("pipeline_offline", {"connected_to_rpi": False})
 
 
 def recv_exact(sock, n_bytes):
@@ -115,6 +129,8 @@ def rpi_receiver_loop():
                     msg = json.loads(raw_data.decode("utf-8"))
                     msg_type = msg.get("type")
                     data = msg.get("data", {})
+                    _last_packet_time = time.time()
+                    _connected_to_rpi = True
 
                     if msg_type == "new_chunk":
                         with _lock:
@@ -181,17 +197,27 @@ def api_pipeline():
         data = dict(_latest_pipeline_data)
         q = list(_queue)
 
-    if not data:
+    is_live = _connected_to_rpi and (_last_packet_time > 0 and (time.time() - _last_packet_time <= 3.5))
+
+    if not data or not is_live:
         data = {
             "stats": {},
             "system": {"temp_c": 0, "throttled": "0x0"},
             "source": {"source_type": "loopback", "device": "hw:Loopback,1,0", "rate": 16000},
-            "bottlenecks": {"overall_status": "connecting" if not _connected_to_rpi else "healthy", "bottlenecks": []},
+            "bottlenecks": {
+                "overall_status": "offline",
+                "bottlenecks": [{
+                    "stage": "Raspberry Pi Pipeline",
+                    "severity": "critical",
+                    "message": "Pipeline is stopped or unreachable. No live packets received.",
+                    "recommendation": "Start launcher.py on Raspberry Pi."
+                }]
+            },
             "waveform": [],
             "recent_events": [],
         }
 
-    data["connected_to_rpi"] = _connected_to_rpi
+    data["connected_to_rpi"] = is_live
     return jsonify(data)
 
 
@@ -201,13 +227,15 @@ def api_stats():
         q = list(_queue)
         pl = dict(_latest_pipeline_data)
 
+    is_live = _connected_to_rpi and (_last_packet_time > 0 and (time.time() - _last_packet_time <= 3.5))
+
     all_ph = [p for item in q for p in item.get("phonemes", [])]
     freq = {}
     for p in all_ph:
         freq[p] = freq.get(p, 0) + 1
     top = sorted(freq.items(), key=lambda x: -x[1])[:12]
 
-    st = pl.get("stats", {})
+    st = pl.get("stats", {}) if is_live else {}
     avg_inf = st.get("last_infer_ms", 0.0)
     avg_rms = sum(i.get("rms_l", 0.0) for i in q) / max(len(q), 1) if q else 0.0
 
@@ -331,10 +359,28 @@ def mqtt_receiver_loop():
         print("[pc_dashboard] MQTT disconnected. Reconnecting...")
 
     def on_message(c, userdata, msg):
-        global _latest_pipeline_data
+        global _latest_pipeline_data, _connected_to_rpi, _last_packet_time
+        # Ignore stale retained messages stored from earlier runs
+        if getattr(msg, "retain", False):
+            return
+
         topic = msg.topic
         try:
+            if not msg.payload:
+                return
             payload = json.loads(msg.payload.decode("utf-8"))
+
+            if topic == "hapticsync/status":
+                is_online = payload.get("online", False)
+                _connected_to_rpi = is_online
+                if not is_online:
+                    print("[pc_dashboard] Raspberry Pi published OFFLINE status.")
+                    socketio.emit("pipeline_offline", {"connected_to_rpi": False})
+                return
+
+            _last_packet_time = time.time()
+            _connected_to_rpi = True
+
             if topic == "hapticsync/chunk":
                 with _lock:
                     _queue.append(payload)
@@ -395,6 +441,10 @@ def main():
     else:
         t = threading.Thread(target=rpi_receiver_loop, daemon=True)
     t.start()
+
+    # Start 3-second watchdog to detect Pi shutdown
+    w = threading.Thread(target=connection_watchdog_loop, daemon=True)
+    w.start()
 
     # Run local web server on PC
     socketio.run(app, host="0.0.0.0", port=LOCAL_WEB_PORT, debug=False, use_reloader=False)

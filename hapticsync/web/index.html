@@ -681,6 +681,15 @@ async function fetchStats(){
       </div>`;
     });
 
+    // Pipeline connectivity state
+    if (d.connected_to_rpi) {
+      document.getElementById('dot').className = 'dot live';
+      document.getElementById('conn-label').textContent = 'Pi Online';
+    } else {
+      document.getElementById('dot').className = 'dot';
+      document.getElementById('conn-label').textContent = 'Pi Offline (Stopped)';
+    }
+
     // Step latency — only real SHM-derived values
     if(d.avg_timing){
       const at = d.avg_timing;
@@ -815,13 +824,17 @@ function stopToast(){
 const socket = io({ transports:['websocket','polling'] });
 
 socket.on('connect', () => {
-  document.getElementById('dot').classList.add('live');
-  document.getElementById('conn-label').textContent = 'Live';
+  fetchStats();
 });
 
 socket.on('disconnect', () => {
   document.getElementById('dot').classList.remove('live');
-  document.getElementById('conn-label').textContent = 'Disconnected';
+  document.getElementById('conn-label').textContent = 'Server Disconnected';
+});
+
+socket.on('pipeline_offline', () => {
+  document.getElementById('dot').classList.remove('live');
+  document.getElementById('conn-label').textContent = 'Pi Offline';
 });
 
 socket.on('queue_snapshot', data => {

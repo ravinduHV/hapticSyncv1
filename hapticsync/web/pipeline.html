@@ -102,7 +102,31 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
 .stage-core{font-size:9px;font-family:'JetBrains Mono',monospace;color:var(--text2);background:var(--bg3);border-radius:3px;padding:1px 5px}
 .stage-val{font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--text0);margin-top:4px}
 .stage-sub{font-size:10px;color:var(--text2)}
-.stage-arrow{display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:16px;opacity:.5}
+/* ── Animated Window Flow Visualizer ───────────────────────────────────── */
+.window-flow-card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r);padding:20px;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden}
+.flow-canvas-wrap{width:100%;height:180px;background:rgba(0,0,0,.45);border-radius:var(--r-sm);border:1px solid var(--border);position:relative;overflow:hidden}
+#anim-flow-canvas{width:100%;height:100%;display:block}
+
+/* Window Anatomy Ruler */
+.anatomy-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.anatomy-hdr{display:flex;justify-content:space-between;align-items:center;font-size:11px}
+.anatomy-bar-container{display:flex;height:38px;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.1);box-shadow:inset 0 2px 6px rgba(0,0,0,.5)}
+.slice-trim-l{width:6%;background:repeating-linear-gradient(45deg,rgba(239,68,68,.18),rgba(239,68,68,.18) 6px,rgba(239,68,68,.08) 6px,rgba(239,68,68,.08) 12px);border-right:1px dashed var(--red);display:flex;align-items:center;justify-content:center;font-size:9px;color:#f87171;font-weight:600;font-family:'JetBrains Mono',monospace}
+.slice-commit{flex:1;background:linear-gradient(90deg,rgba(0,212,255,.2),rgba(16,185,129,.25));display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;color:var(--text0);font-weight:600;font-family:'JetBrains Mono',monospace}
+.slice-trim-r{width:6%;background:repeating-linear-gradient(45deg,rgba(239,68,68,.18),rgba(239,68,68,.18) 6px,rgba(239,68,68,.08) 6px,rgba(239,68,68,.08) 12px);border-left:1px dashed var(--red);display:flex;align-items:center;justify-content:center;font-size:9px;color:#f87171;font-weight:600;font-family:'JetBrains Mono',monospace}
+.anatomy-ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--text2);font-family:'JetBrains Mono',monospace;padding:0 2px}
+
+/* Stage Details Bar */
+.stage-pills-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.stage-pill-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;display:flex;flex-direction:column;gap:3px;transition:all .3s}
+.stage-pill-box.active{border-color:var(--cyan);box-shadow:0 0 12px rgba(0,212,255,.2)}
+.stage-pill-title{font-size:10px;text-transform:uppercase;color:var(--text2);display:flex;justify-content:space-between;align-items:center}
+.stage-pill-val{font-size:13px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--text0)}
+.stage-pill-timing{font-size:10px;color:var(--cyan);font-family:'JetBrains Mono',monospace}
+
+/* Model Busy Pulse Glow */
+@keyframes modelPulseGlow{0%,100%{box-shadow:0 0 8px rgba(0,212,255,.3)}50%{box-shadow:0 0 22px rgba(0,212,255,.7);border-color:var(--cyan)}}
+.model-pulsing{animation:modelPulseGlow 1.5s infinite;border-color:var(--cyan) !important}
 
 /* ── KPI Grid ──────────────────────────────────────────────────────────── */
 .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
@@ -201,90 +225,95 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
     </div>
   </section>
 
-  <!-- ── Pipeline Topology Diagram ───────────────────────────────────────── -->
-  <section class="pipeline-card">
+  <!-- ── Interactive Architecture & Audio Window Flow Visualizer ───────────── -->
+  <section class="window-flow-card">
     <div class="section-hdr">
-      <span class="section-title">⚡ End-to-End Pipeline Stages (RPi 5 Core Topology)</span>
-      <span style="font-size:11px;color:var(--text2)">Lock-Free POSIX SHM + AF_UNIX SOCK_SEQPACKET</span>
+      <span class="section-title">⚡ Real-Time Audio Sample & Window Architecture Flow</span>
+      <div style="display:flex;align-items:center;gap:12px;font-size:11px">
+        <span style="color:var(--text2)">Status: <b id="wf-status-txt" style="color:var(--green)">STREAMING</b></span>
+        <span class="badge badge-cyan" id="wf-active-policy">LATEST POLICY</span>
+      </div>
     </div>
-    <div class="flow-diagram">
 
-      <!-- Stage 1 -->
-      <div class="stage-node" id="sn-source">
-        <div class="stage-hdr">
-          <span class="stage-name">🎙️ Audio In</span>
-          <span class="stage-core" id="sn-source-type">I2S / ALSA</span>
-        </div>
-        <div class="stage-val" id="sn-source-rate">16.0 kHz</div>
-        <div class="stage-sub" id="sn-source-dev">hw:Loopback,1</div>
+    <!-- Live Animated Flow Canvas -->
+    <div class="flow-canvas-wrap">
+      <canvas id="anim-flow-canvas" height="180"></canvas>
+    </div>
+
+    <!-- Window Anatomy Breakdown Ruler -->
+    <div class="anatomy-wrap">
+      <div class="anatomy-hdr">
+        <span><b>Window Slicing & Overlap-Save Anatomy</b> (fixed_window_ms = <span id="anat-win-ms">1000</span>ms / <span id="anat-win-samps">16,000</span> samples)</span>
+        <span style="color:var(--cyan);font-family:'JetBrains Mono',monospace" id="anat-stride-txt">320 samps / 20ms frame stride</span>
       </div>
-      <div class="stage-arrow">→</div>
-
-      <!-- Stage 2 -->
-      <div class="stage-node" id="sn-producer">
-        <div class="stage-hdr">
-          <span class="stage-name">⚙️ Producer</span>
-          <span class="stage-core">CPU 1 (RT)</span>
+      <div class="anatomy-bar-container">
+        <div class="slice-trim-l" id="anat-trim-l" title="Left Trim: 60ms (3 frames) discarded to remove boundary artifacts">TRIM L: 60ms</div>
+        <div class="slice-commit" id="anat-commit" title="Committed Region: 880ms (44 frames) transcribed and emitted as phonemes">
+          <span>🟩 COMMITTED CORE: 880ms (44 model frames @ 20ms)</span>
+          <span style="font-size:10px;opacity:.7">→ Posix Event Ring</span>
         </div>
-        <div class="stage-val" id="sn-prod-rate">0 p/s</div>
-        <div class="stage-sub" id="sn-prod-sub">RT if configured</div>
+        <div class="slice-trim-r" id="anat-trim-r" title="Right Trim: 60ms (3 frames) discarded">TRIM R: 60ms</div>
       </div>
-      <div class="stage-arrow">→</div>
-
-      <!-- Stage 3 -->
-      <div class="stage-node" id="sn-audio-ring">
-        <div class="stage-hdr">
-          <span class="stage-name">🔄 Audio Ring</span>
-          <span class="stage-core">SHM 60s</span>
-        </div>
-        <div class="stage-val" id="sn-ring-cap">1.05M samp</div>
-        <div class="stage-sub" id="sn-ring-sub">Lock-Free SPSC</div>
+      <div class="anatomy-ticks">
+        <span>0 ms (0 samps)</span>
+        <span>60 ms (960)</span>
+        <span style="color:var(--text1)">Window Timeline: 1,000 ms @ 16 kHz Mono</span>
+        <span>940 ms (15,040)</span>
+        <span>1,000 ms (16,000)</span>
       </div>
-      <div class="stage-arrow">→</div>
+    </div>
 
-      <!-- Stage 4 -->
-      <div class="stage-node" id="sn-assembler">
-        <div class="stage-hdr">
-          <span class="stage-name">🪟 Assembler</span>
-          <span class="stage-core">CPU 1</span>
+    <!-- Stage Hop Timing & Statistics Row -->
+    <div class="stage-pills-row">
+      <!-- Hop 1 -->
+      <div class="stage-pill-box" id="hop-box-capture">
+        <div class="stage-pill-title">
+          <span>🎙️ 1. Audio Capture</span>
+          <span class="badge badge-cyan" style="font-size:9px">CPU 1</span>
         </div>
-        <div class="stage-val" id="sn-assem-val">0 sent</div>
-        <div class="stage-sub" id="sn-assem-sub">Window Tiler</div>
-      </div>
-      <div class="stage-arrow">→</div>
-
-      <!-- Stage 5 -->
-      <div class="stage-node" id="sn-infer">
-        <div class="stage-hdr">
-          <span class="stage-name">🧠 Inference</span>
-          <span class="stage-core">CPU 2,3</span>
-        </div>
-        <div class="stage-val" id="sn-infer-val">— ms</div>
-        <div class="stage-sub" id="sn-infer-sub">Wav2Vec2 2-Core</div>
-      </div>
-      <div class="stage-arrow">→</div>
-
-      <!-- Stage 6 -->
-      <div class="stage-node" id="sn-post">
-        <div class="stage-hdr">
-          <span class="stage-name">🔤 PostProc</span>
-          <span class="stage-core">CPU 1</span>
-        </div>
-        <div class="stage-val" id="sn-post-val">0 evts</div>
-        <div class="stage-sub" id="sn-post-sub">CTC Collapse</div>
-      </div>
-      <div class="stage-arrow">→</div>
-
-      <!-- Stage 7 -->
-      <div class="stage-node" id="sn-telem">
-        <div class="stage-hdr">
-          <span class="stage-name">📊 Telemetry</span>
-          <span class="stage-core">CPU 0</span>
-        </div>
-        <div class="stage-val" id="sn-telem-val">Active</div>
-        <div class="stage-sub" id="sn-telem-sub">Port 5000</div>
+        <div class="stage-pill-val" id="hop-val-cap">160 s/period</div>
+        <div class="stage-pill-timing">⏱️ 10.0 ms ALSA period</div>
       </div>
 
+      <!-- Hop 2 -->
+      <div class="stage-pill-box" id="hop-box-ring">
+        <div class="stage-pill-title">
+          <span>🔄 2. Audio Ring</span>
+          <span class="badge badge-cyan" style="font-size:9px">SHM 60s</span>
+        </div>
+        <div class="stage-pill-val" id="hop-val-ring">1,048,576 s</div>
+        <div class="stage-pill-timing">⚡ 0.0 ms (Lock-free SPSC)</div>
+      </div>
+
+      <!-- Hop 3 -->
+      <div class="stage-pill-box" id="hop-box-assembler">
+        <div class="stage-pill-title">
+          <span>🪟 3. Window Assembler</span>
+          <span class="badge badge-cyan" style="font-size:9px">CPU 1</span>
+        </div>
+        <div class="stage-pill-val" id="hop-val-assem">16,000 samps</div>
+        <div class="stage-pill-timing" id="hop-time-assem">⚡ 0.4 ms normalization</div>
+      </div>
+
+      <!-- Hop 4 -->
+      <div class="stage-pill-box" id="hop-box-model">
+        <div class="stage-pill-title">
+          <span>🧠 4. Wav2Vec2 Inference</span>
+          <span class="badge badge-purple" style="font-size:9px">CPU 2,3</span>
+        </div>
+        <div class="stage-pill-val" id="hop-val-model">— ms</div>
+        <div class="stage-pill-timing" id="hop-time-model">⏱️ 2 PyTorch Threads</div>
+      </div>
+
+      <!-- Hop 5 -->
+      <div class="stage-pill-box" id="hop-box-post">
+        <div class="stage-pill-title">
+          <span>🔤 5. CTC PostProc</span>
+          <span class="badge badge-green" style="font-size:9px">CPU 1</span>
+        </div>
+        <div class="stage-pill-val" id="hop-val-post">0 events</div>
+        <div class="stage-pill-timing">⚡ &lt; 0.5 ms collapse</div>
+      </div>
     </div>
   </section>
 
@@ -568,6 +597,162 @@ let lastEvents = [];
 let pipelineStartWall = null;   // PC wall-clock time when pipeline start_ns first seen
 let lastStartNs = 0;            // last seen start_ns from SHM
 
+// ── Live Architecture Flow Animation Engine ──────────────────────────────
+const flowCanvas = document.getElementById('anim-flow-canvas');
+let flowCtx = flowCanvas ? flowCanvas.getContext('2d') : null;
+let flowParticles = [];
+let lastAnimTime = performance.now();
+
+function initParticles() {
+  flowParticles = [];
+  for (let i = 0; i < 24; i++) {
+    flowParticles.push({
+      progress: Math.random(),
+      speed: 0.18 + Math.random() * 0.12,
+      stage: Math.floor(Math.random() * 4),
+      size: 2.5 + Math.random() * 2,
+      color: Math.random() > 0.3 ? '#00d4ff' : '#a855f7'
+    });
+  }
+}
+initParticles();
+
+function renderArchitectureFlow() {
+  if (!flowCanvas || !flowCtx) return;
+  const W = flowCanvas.offsetWidth || 1000;
+  const H = flowCanvas.height || 180;
+  flowCanvas.width = W;
+  flowCtx.clearRect(0, 0, W, H);
+
+  const now = performance.now();
+  const dt = (now - lastAnimTime) / 1000;
+  lastAnimTime = now;
+
+  const st = lastStats || {};
+  const isBusy = !!st.model_busy;
+
+  // Node Centers
+  const nodes = [
+    { id: 'src', x: W * 0.09, y: H * 0.50, title: '🎙️ ALSA In', sub: 'hw:Loopback,1', tag: 'CPU 1', color: '#00d4ff', val: '160 s/p' },
+    { id: 'ring', x: W * 0.29, y: H * 0.50, title: '🔄 Audio Ring', sub: 'SHM 60s Buffer', tag: 'SPSC', color: '#3b82f6', val: (st.periods_captured || 0).toLocaleString() + ' p' },
+    { id: 'assem', x: W * 0.50, y: H * 0.50, title: '🪟 Assembler', sub: 'Window Tiler', tag: 'CPU 1', color: '#10b981', val: (st.windows_sent || 0) + ' sent' },
+    { id: 'model', x: W * 0.71, y: H * 0.50, title: '🧠 Wav2Vec2', sub: 'PyTorch 2-Core', tag: 'CPU 2,3', color: isBusy ? '#00d4ff' : '#a855f7', val: st.last_infer_ms ? st.last_infer_ms.toFixed(0) + ' ms' : '— ms' },
+    { id: 'post', x: W * 0.91, y: H * 0.50, title: '🔤 Event Ring', sub: 'CTC Collapse', tag: 'POSIX SHM', color: '#10b981', val: (st.events_emitted || 0).toLocaleString() + ' evts' }
+  ];
+
+  // Draw Interconnecting Flow Lines
+  flowCtx.lineWidth = 3;
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const n1 = nodes[i];
+    const n2 = nodes[i + 1];
+
+    // Background track
+    flowCtx.strokeStyle = 'rgba(255,255,255,0.08)';
+    flowCtx.beginPath();
+    flowCtx.moveTo(n1.x + 45, n1.y);
+    flowCtx.lineTo(n2.x - 45, n2.y);
+    flowCtx.stroke();
+
+    // Subtle glow on line between Assembler & Model if busy
+    if (i === 2 && isBusy) {
+      flowCtx.strokeStyle = 'rgba(0,212,255,0.35)';
+      flowCtx.beginPath();
+      flowCtx.moveTo(n1.x + 45, n1.y);
+      flowCtx.lineTo(n2.x - 45, n2.y);
+      flowCtx.stroke();
+    }
+  }
+
+  // Draw Hop Timing / Data Labels on tracks
+  flowCtx.font = '9px "JetBrains Mono", monospace';
+  flowCtx.textAlign = 'center';
+  flowCtx.fillStyle = 'rgba(143,174,200,0.7)';
+  flowCtx.fillText('10ms (160s)', (nodes[0].x + nodes[1].x) / 2, H * 0.35);
+  flowCtx.fillText('SPSC Lock-Free', (nodes[1].x + nodes[2].x) / 2, H * 0.35);
+  flowCtx.fillText('1,000ms Window', (nodes[2].x + nodes[3].x) / 2, H * 0.35);
+  flowCtx.fillText('CTC Tokens', (nodes[3].x + nodes[4].x) / 2, H * 0.35);
+
+  // Update & Draw Flow Particles
+  flowParticles.forEach(p => {
+    p.progress += p.speed * dt * (isBusy && p.stage === 2 ? 1.8 : 1.0);
+    if (p.progress >= 1.0) {
+      p.progress = 0;
+      p.stage = (p.stage + 1) % 4;
+    }
+    const nA = nodes[p.stage];
+    const nB = nodes[p.stage + 1];
+    const startX = nA.x + 45;
+    const endX = nB.x - 45;
+    const curX = startX + (endX - startX) * p.progress;
+    const curY = nA.y;
+
+    flowCtx.fillStyle = p.color;
+    flowCtx.shadowColor = p.color;
+    flowCtx.shadowBlur = 8;
+    flowCtx.beginPath();
+    flowCtx.arc(curX, curY, p.size, 0, Math.PI * 2);
+    flowCtx.fill();
+    flowCtx.shadowBlur = 0; // reset
+  });
+
+  // Draw Stage Nodes
+  nodes.forEach((n, idx) => {
+    const bw = 95;
+    const bh = 56;
+    const bx = n.x - bw / 2;
+    const by = n.y - bh / 2;
+
+    // Node Box Background
+    flowCtx.fillStyle = '#111827';
+    flowCtx.strokeStyle = (n.id === 'model' && isBusy) ? '#00d4ff' : 'rgba(255,255,255,0.12)';
+    flowCtx.lineWidth = (n.id === 'model' && isBusy) ? 2 : 1;
+
+    // Glow if Model is busy
+    if (n.id === 'model' && isBusy) {
+      flowCtx.shadowColor = 'rgba(0,212,255,0.5)';
+      flowCtx.shadowBlur = 14;
+    }
+
+    // Rounded rectangle
+    flowCtx.beginPath();
+    flowCtx.roundRect(bx, by, bw, bh, 6);
+    flowCtx.fill();
+    flowCtx.stroke();
+    flowCtx.shadowBlur = 0;
+
+    // Core Tag Pill
+    flowCtx.fillStyle = 'rgba(255,255,255,0.06)';
+    flowCtx.beginPath();
+    flowCtx.roundRect(bx + bw - 38, by + 4, 34, 12, 3);
+    flowCtx.fill();
+    flowCtx.fillStyle = '#8faec8';
+    flowCtx.font = '8px "JetBrains Mono", monospace';
+    flowCtx.textAlign = 'center';
+    flowCtx.fillText(n.tag, bx + bw - 21, by + 13);
+
+    // Title
+    flowCtx.fillStyle = '#e8f3fb';
+    flowCtx.font = 'bold 10px Inter, sans-serif';
+    flowCtx.textAlign = 'left';
+    flowCtx.fillText(n.title, bx + 6, by + 14);
+
+    // Value
+    flowCtx.fillStyle = n.color;
+    flowCtx.font = 'bold 12px "JetBrains Mono", monospace';
+    flowCtx.fillText(n.val, bx + 6, by + 33);
+
+    // Subtitle
+    flowCtx.fillStyle = '#476582';
+    flowCtx.font = '8px Inter, sans-serif';
+    flowCtx.fillText(n.sub, bx + 6, by + 48);
+  });
+
+  if (!paused) {
+    requestAnimationFrame(renderArchitectureFlow);
+  }
+}
+requestAnimationFrame(renderArchitectureFlow);
+
 // ── Chart Draw Helpers ────────────────────────────────────────────────────
 function drawLineChart(canvas, datasets, colors, maxVal) {
   const ctx = canvas.getContext('2d');
@@ -645,6 +830,17 @@ function updateDashboard(data) {
   const bneck = data.bottlenecks || {};
   lastStats = st;
 
+  const isLive = data.connected_to_rpi !== false;
+  const netDot = document.getElementById('net-dot');
+  const netLbl = document.getElementById('net-label');
+  if (isLive) {
+    if (netDot) netDot.className = 'dot live';
+    if (netLbl) netLbl.textContent = 'Pi Online (Live)';
+  } else {
+    if (netDot) netDot.className = 'dot';
+    if (netLbl) netLbl.textContent = 'Pi Offline (Stopped)';
+  }
+
   // 1. Diagnostic Banner
   const banner = document.getElementById('diag-banner');
   const dIcon = document.getElementById('diag-icon');
@@ -692,21 +888,22 @@ function updateDashboard(data) {
     document.getElementById('kpi-evt-rate').textContent = evtRate + ' /s';
   }
 
-  // 2. Topology Nodes
-  const inferNode = document.getElementById('sn-infer');
+  // 2. Interactive Window Flow Visualizer Updates
+  const modelBox = document.getElementById('hop-box-model');
+  const wfStatus = document.getElementById('wf-status-txt');
   if (st.model_busy) {
-    inferNode.classList.add('active-busy');
+    if (modelBox) modelBox.classList.add('model-pulsing');
+    if (wfStatus) { wfStatus.textContent = 'NEURAL FORWARD PASS IN PROGRESS...'; wfStatus.style.color = 'var(--cyan)'; }
   } else {
-    inferNode.classList.remove('active-busy');
+    if (modelBox) modelBox.classList.remove('model-pulsing');
+    if (wfStatus) { wfStatus.textContent = 'STREAMING (Nominal)'; wfStatus.style.color = 'var(--green)'; }
   }
-  document.getElementById('sn-source-type').textContent = src.source_type ? src.source_type.toUpperCase() : 'ALSA';
-  document.getElementById('sn-source-dev').textContent = src.device || 'hw:Loopback,1';
-  document.getElementById('sn-source-rate').textContent = `${(src.rate || 16000) / 1000} kHz`;
 
-  document.getElementById('sn-prod-rate').textContent = `${st.periods_captured || 0} p`;
-  document.getElementById('sn-assem-val').textContent = `${st.windows_sent || 0} sent`;
-  document.getElementById('sn-infer-val').textContent = st.last_infer_ms ? `${st.last_infer_ms.toFixed(0)} ms` : '— ms';
-  document.getElementById('sn-post-val').textContent = `${st.events_emitted || 0} evts`;
+  if (document.getElementById('hop-val-cap')) document.getElementById('hop-val-cap').textContent = `${(st.periods_captured || 0).toLocaleString()} p`;
+  if (document.getElementById('hop-val-ring')) document.getElementById('hop-val-ring').textContent = `${(st.samples_captured || 0).toLocaleString()} s`;
+  if (document.getElementById('hop-val-assem')) document.getElementById('hop-val-assem').textContent = `${st.windows_sent || 0} sent (${st.windows_dropped || 0} drop)`;
+  if (document.getElementById('hop-val-model')) document.getElementById('hop-val-model').textContent = st.last_infer_ms ? `${st.last_infer_ms.toFixed(0)} ms` : '— ms';
+  if (document.getElementById('hop-val-post')) document.getElementById('hop-val-post').textContent = `${(st.events_emitted || 0).toLocaleString()} evts`;
 
   // 3. KPI Cards
   document.getElementById('kpi-periods').textContent = (st.periods_captured || 0).toLocaleString();
@@ -882,13 +1079,20 @@ function togglePause() {
 // Socket.IO
 const socket = io({ transports: ['websocket', 'polling'] });
 socket.on('connect', () => {
-  document.getElementById('net-dot').classList.add('live');
-  document.getElementById('net-label').textContent = 'Live Connected';
   fetchPipeline();
 });
 socket.on('disconnect', () => {
   document.getElementById('net-dot').classList.remove('live');
-  document.getElementById('net-label').textContent = 'Disconnected';
+  document.getElementById('net-label').textContent = 'Server Disconnected';
+});
+socket.on('pipeline_offline', () => {
+  document.getElementById('net-dot').classList.remove('live');
+  document.getElementById('net-label').textContent = 'Pi Offline (Stopped)';
+  const wfStatus = document.getElementById('wf-status-txt');
+  if (wfStatus) {
+    wfStatus.textContent = 'PIPELINE STOPPED (OFFLINE)';
+    wfStatus.style.color = 'var(--red)';
+  }
 });
 socket.on('pipeline_update', data => {
   updateDashboard(data);
