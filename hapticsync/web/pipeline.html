@@ -227,7 +227,7 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
           <span class="stage-core">CPU 1 (RT)</span>
         </div>
         <div class="stage-val" id="sn-prod-rate">0 p/s</div>
-        <div class="stage-sub" id="sn-prod-sub">SCHED_FIFO</div>
+        <div class="stage-sub" id="sn-prod-sub">RT if configured</div>
       </div>
       <div class="stage-arrow">→</div>
 
@@ -345,6 +345,62 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
       </div>
     </div>
 
+  </section>
+
+  <!-- ── Session Totals (Accumulation Stats) ──────────────────────────────── -->
+  <section class="pipeline-card" style="padding:14px 18px">
+    <div class="section-hdr" style="margin-bottom:10px">
+      <span class="section-title">📋 Session Accumulation Totals (since pipeline start)</span>
+      <span style="font-size:11px;color:var(--text2)" id="session-uptime-lbl">Uptime: —</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">
+      <div class="gauge-box">
+        <span class="gauge-lbl">Periods Captured</span>
+        <span class="gauge-val" id="tot-periods" style="font-size:18px;color:var(--cyan)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Samples Captured</span>
+        <span class="gauge-val" id="tot-samples" style="font-size:18px;color:var(--cyan)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Windows Sent</span>
+        <span class="gauge-val" id="tot-wins-sent" style="font-size:18px;color:var(--text0)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Windows Done (%)</span>
+        <span class="gauge-val" id="tot-wins-done" style="font-size:18px;color:var(--green)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Windows Dropped (%)</span>
+        <span class="gauge-val" id="tot-wins-drop" style="font-size:18px;color:var(--amber)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Events Emitted</span>
+        <span class="gauge-val" id="tot-events" style="font-size:18px;color:var(--green)">—</span>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px">
+      <div class="gauge-box">
+        <span class="gauge-lbl">Capture Rate</span>
+        <span class="gauge-val" id="tot-caprate" style="font-size:18px;color:var(--cyan)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Events / sec</span>
+        <span class="gauge-val" id="tot-evtrate" style="font-size:18px;color:var(--green)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Avg Lag</span>
+        <span class="gauge-val" id="tot-avg-lag" style="font-size:18px;color:var(--purple)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">XRUNs</span>
+        <span class="gauge-val" id="tot-xruns" style="font-size:18px;color:var(--red)">—</span>
+      </div>
+      <div class="gauge-box">
+        <span class="gauge-lbl">Ring Laps</span>
+        <span class="gauge-val" id="tot-laps" style="font-size:18px;color:var(--amber)">—</span>
+      </div>
+    </div>
   </section>
 
   <!-- ── Main Grid ───────────────────────────────────────────────────────── -->
@@ -509,7 +565,8 @@ let historyFlow = { sent: [], done: [], drop: [] };
 let historyLag = { lag: [], infer: [] };
 let lastStats = null;
 let lastEvents = [];
-let startTime = null;
+let pipelineStartWall = null;   // PC wall-clock time when pipeline start_ns first seen
+let lastStartNs = 0;            // last seen start_ns from SHM
 
 // ── Chart Draw Helpers ────────────────────────────────────────────────────
 function drawLineChart(canvas, datasets, colors, maxVal) {
@@ -618,11 +675,21 @@ function updateDashboard(data) {
   document.getElementById('dm-busy').textContent = st.model_busy ? 'PROCESSING' : 'IDLE';
   document.getElementById('dm-audio').textContent = (st.xruns > 0) ? `${st.xruns} XRUNs` : 'HEALTHY';
 
-  // Uptime
-  if (st.start_ns) {
-    if (!startTime) startTime = Date.now();
-    const upSec = (Date.now() - startTime) / 1000;
+  // Uptime — derived from SHM start_ns via PC wall clock
+  if (st.start_ns && st.start_ns > 0) {
+    if (!pipelineStartWall || lastStartNs !== st.start_ns) {
+      // Pipeline restarted or first connection: anchor wall clock now
+      if (lastStartNs !== st.start_ns) {
+        pipelineStartWall = Date.now();
+        lastStartNs = st.start_ns;
+      }
+    }
+    const upSec = (Date.now() - pipelineStartWall) / 1000;
     document.getElementById('nav-uptime').textContent = fmtUptime(upSec);
+
+    // Event rate = events_emitted / uptime_s
+    const evtRate = upSec > 0 ? (st.events_emitted / upSec).toFixed(2) : '0';
+    document.getElementById('kpi-evt-rate').textContent = evtRate + ' /s';
   }
 
   // 2. Topology Nodes
@@ -671,6 +738,9 @@ function updateDashboard(data) {
     else if (sys.temp_c > 60) tempEl.style.color = 'var(--amber)';
     else tempEl.style.color = 'var(--green)';
   }
+  if (sys.freq_mhz && sys.freq_mhz > 0) {
+    document.getElementById('hw-freq').textContent = `${sys.freq_mhz} MHz`;
+  }
   if (sys.throttled) {
     const thStr = sys.throttled_flags && sys.throttled_flags.length > 0 ?
       `${sys.throttled}: ${sys.throttled_flags.join(', ')}` : `${sys.throttled} (Nominal)`;
@@ -715,7 +785,37 @@ function updateDashboard(data) {
     document.getElementById('src-rms-lbl').textContent = `RMS: ${rms.toFixed(3)}`;
   }
 
-  // 7. Bottlenecks List
+  // 7. Session Totals panel
+  if (pipelineStartWall) {
+    const upSec = (Date.now() - pipelineStartWall) / 1000;
+    const capRate = upSec > 0 ? (st.periods_captured / upSec).toFixed(1) : '—';
+    const evtRate = upSec > 0 ? (st.events_emitted / upSec).toFixed(2) : '—';
+    const winSent = st.windows_sent || 0;
+    const winDone = st.windows_done || 0;
+    const winDrop = st.windows_dropped || 0;
+    const donePct = winSent > 0 ? (winDone / winSent * 100).toFixed(1) : '0';
+    const dropPct = winSent > 0 ? (winDrop / winSent * 100).toFixed(1) : '0';
+
+    document.getElementById('session-uptime-lbl').textContent = 'Uptime: ' + fmtUptime(upSec);
+    document.getElementById('tot-periods').textContent = (st.periods_captured || 0).toLocaleString();
+    document.getElementById('tot-samples').textContent = (st.samples_captured || 0).toLocaleString();
+    document.getElementById('tot-wins-sent').textContent = winSent.toLocaleString();
+    document.getElementById('tot-wins-done').textContent = `${winDone.toLocaleString()} (${donePct}%)`;
+    document.getElementById('tot-wins-drop').textContent = `${winDrop.toLocaleString()} (${dropPct}%)`;
+    document.getElementById('tot-events').textContent = (st.events_emitted || 0).toLocaleString();
+    document.getElementById('tot-caprate').textContent = capRate + ' p/s';
+    document.getElementById('tot-evtrate').textContent = evtRate + ' /s';
+    document.getElementById('tot-avg-lag').textContent = st.avg_lag_ms ? st.avg_lag_ms.toFixed(1) + ' ms' : '—';
+    document.getElementById('tot-xruns').textContent = st.xruns || 0;
+    document.getElementById('tot-laps').textContent = st.events_lapped || 0;
+
+    // Also update the navbar uptime
+    document.getElementById('nav-uptime').textContent = fmtUptime(upSec);
+    // Event rate on KPI
+    document.getElementById('kpi-evt-rate').textContent = evtRate + ' /s';
+  }
+
+  // 8. Bottlenecks List
   const bList = document.getElementById('bottleneck-list');
   bList.innerHTML = '';
   if (bneck.bottlenecks && bneck.bottlenecks.length > 0) {

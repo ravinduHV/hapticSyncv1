@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  mqtt-broker:
+    image: eclipse-mosquitto:latest
+    container_name: hapticsync-mqtt-broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT TCP port (Raspberry Pi & PC dashboard)
+      - "9001:9001"   # MQTT WebSockets port (optional browser tools)
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+

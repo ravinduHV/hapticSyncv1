@@ -23,11 +23,17 @@ parser = argparse.ArgumentParser(description="HapticSync Remote PC Dashboard")
 parser.add_argument("--host", default="192.168.8.140", help="Raspberry Pi IP address (default: 192.168.8.140)")
 parser.add_argument("--port", type=int, default=5555, help="Raspberry Pi publisher TCP port (default: 5555)")
 parser.add_argument("--web-port", type=int, default=5000, help="Local PC dashboard HTTP port (default: 5000)")
+parser.add_argument("--mqtt", action="store_true", help="Subscribe via MQTT instead of raw TCP socket")
+parser.add_argument("--broker", default="localhost", help="MQTT broker address (default: localhost)")
+parser.add_argument("--broker-port", type=int, default=1883, help="MQTT broker port (default: 1883)")
 args = parser.parse_args()
 
 RPI_HOST = args.host
 RPI_PORT = args.port
 LOCAL_WEB_PORT = args.web_port
+USE_MQTT = args.mqtt
+MQTT_BROKER = args.broker
+MQTT_PORT = args.broker_port
 
 
 def find_web_dir():
@@ -55,6 +61,10 @@ _queue = collections.deque(maxlen=MAX_CHUNKS)
 _latest_pipeline_data = {}
 _lock = threading.Lock()
 _connected_to_rpi = False
+
+# Uptime tracking: store first-seen RPi monotonic start_ns alongside PC wall time
+_rpi_start_ns   = [0]      # list so it's mutable from nested scope
+_rpi_start_wall = [0.0]    # time.time() when we first saw the pipeline's start_ns
 
 
 def recv_exact(sock, n_bytes):
@@ -111,9 +121,14 @@ def rpi_receiver_loop():
                             _queue.append(data)
                         socketio.emit("new_chunk", data)
 
-                    elif msg_type == "pipeline_update":
+                    if msg_type == "pipeline_update":
                         with _lock:
                             _latest_pipeline_data = data
+                            # Track RPi pipeline start for uptime computation
+                            start_ns = data.get("stats", {}).get("start_ns", 0)
+                            if start_ns and start_ns > 0 and _rpi_start_ns[0] == 0:
+                                _rpi_start_ns[0] = start_ns
+                                _rpi_start_wall[0] = time.time()
                             # Populate recent events from queue if empty
                             if not data.get("recent_events"):
                                 revts = []
@@ -196,6 +211,32 @@ def api_stats():
     avg_inf = st.get("last_infer_ms", 0.0)
     avg_rms = sum(i.get("rms_l", 0.0) for i in q) / max(len(q), 1) if q else 0.0
 
+    # ── Accumulation stats derived from SHM fields ──────────────────────────
+    start_ns = st.get("start_ns", 0)
+    uptime_s = 0.0
+    if start_ns and start_ns > 0:
+        # start_ns is CLOCK_MONOTONIC on the RPi; we don't have its epoch,
+        # so derive uptime from elapsed periods instead when possible.
+        # Prefer a wall-clock approximation: track first-seen time on PC side.
+        with _lock:
+            if _rpi_start_ns[0] == 0 and start_ns > 0:
+                _rpi_start_ns[0] = start_ns
+                _rpi_start_wall[0] = time.time()
+            if _rpi_start_wall[0] > 0:
+                uptime_s = time.time() - _rpi_start_wall[0]
+
+    windows_sent = st.get("windows_sent", 0)
+    windows_done = st.get("windows_done", 0)
+    windows_dropped = st.get("windows_dropped", 0)
+    events_emitted = st.get("events_emitted", 0)
+    periods_captured = st.get("periods_captured", 0)
+    samples_captured = st.get("samples_captured", 0)
+
+    window_done_pct = round(windows_done / max(windows_sent, 1) * 100, 1)
+    drop_rate_pct   = round(windows_dropped / max(windows_sent, 1) * 100, 1)
+    events_per_sec  = round(events_emitted / max(uptime_s, 1), 2)
+    capture_rate_hz = round(periods_captured / max(uptime_s, 1), 1)
+
     return jsonify({
         "total_chunks": len(q),
         "max_chunks": MAX_CHUNKS,
@@ -206,10 +247,30 @@ def api_stats():
         "avg_rms_r": round(avg_rms, 4),
         "avg_inf_ms": avg_inf,
         "connected_to_rpi": _connected_to_rpi,
+        # Lag stats (from SHM lifetime counters)
+        "last_lag_ms":  st.get("last_lag_ms", 0.0),
+        "avg_lag_ms":   st.get("avg_lag_ms", 0.0),
+        "min_lag_ms":   st.get("min_lag_ms", 0.0),
+        "max_lag_ms":   st.get("max_lag_ms", 0.0),
+        # Accumulation / pipeline-wide totals
+        "uptime_s":           round(uptime_s, 1),
+        "periods_captured":   periods_captured,
+        "samples_captured":   samples_captured,
+        "windows_sent":       windows_sent,
+        "windows_done":       windows_done,
+        "windows_dropped":    windows_dropped,
+        "window_done_pct":    window_done_pct,
+        "drop_rate_pct":      drop_rate_pct,
+        "events_emitted":     events_emitted,
+        "events_lapped":      st.get("events_lapped", 0),
+        "events_per_sec":     events_per_sec,
+        "capture_rate_hz":    capture_rate_hz,
+        "xruns":              st.get("xruns", 0),
+        "gaps":               st.get("gaps", 0),
+        "model_busy":         st.get("model_busy", 0),
         "avg_timing": {
             "compute": avg_inf,
-            "total": st.get("last_lag_ms", 0.0),
-            "record": 10.0,
+            "total":   st.get("last_lag_ms", 0.0),
             "forward": avg_inf,
         },
     })
@@ -242,16 +303,97 @@ def on_connect():
         emit("pipeline_update", pl)
 
 
+def mqtt_receiver_loop():
+    """Background thread that connects to MQTT broker and subscribes to telemetry topics."""
+    global _connected_to_rpi, _latest_pipeline_data
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("[pc_dashboard] ERROR: paho-mqtt is required for --mqtt mode. Run: pip install paho-mqtt")
+        return
+
+    print(f"[pc_dashboard] Connecting to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}...")
+    client = mqtt.Client(client_id="hapticsync_pc_dashboard", clean_session=True)
+
+    def on_connect(c, userdata, flags, rc):
+        global _connected_to_rpi
+        if rc == 0:
+            _connected_to_rpi = True
+            print(f"[pc_dashboard] CONNECTED to MQTT broker! Subscribing to hapticsync/#...")
+            c.subscribe("hapticsync/#")
+        else:
+            _connected_to_rpi = False
+            print(f"[pc_dashboard] MQTT connection failed (code {rc})")
+
+    def on_disconnect(c, userdata, rc):
+        global _connected_to_rpi
+        _connected_to_rpi = False
+        print("[pc_dashboard] MQTT disconnected. Reconnecting...")
+
+    def on_message(c, userdata, msg):
+        global _latest_pipeline_data
+        topic = msg.topic
+        try:
+            payload = json.loads(msg.payload.decode("utf-8"))
+            if topic == "hapticsync/chunk":
+                with _lock:
+                    _queue.append(payload)
+                socketio.emit("new_chunk", payload)
+            elif topic == "hapticsync/pipeline_update":
+                with _lock:
+                    _latest_pipeline_data = payload
+                    start_ns = payload.get("stats", {}).get("start_ns", 0)
+                    if start_ns and start_ns > 0 and _rpi_start_ns[0] == 0:
+                        _rpi_start_ns[0] = start_ns
+                        _rpi_start_wall[0] = time.time()
+                    if not payload.get("recent_events"):
+                        revts = []
+                        for ch in list(_queue)[-10:]:
+                            for p in ch.get("phonemes", []):
+                                revts.append({
+                                    "event_id": ch.get("index", 0),
+                                    "phoneme": p,
+                                    "confidence": 0.95,
+                                    "lag_ms": ch.get("timing", {}).get("total", 0.0),
+                                    "timestamp": ch.get("timestamp", ""),
+                                })
+                        payload["recent_events"] = revts
+                socketio.emit("pipeline_update", payload)
+        except Exception as e:
+            print(f"[pc_dashboard] Error handling MQTT msg on {topic}: {e}")
+
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.on_message = on_message
+
+    while True:
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+            client.loop_forever()
+        except Exception as e:
+            _connected_to_rpi = False
+            print(f"[pc_dashboard] MQTT error: {e}. Retrying in 3s...")
+            time.sleep(3.0)
+
+
 def main():
     print("==========================================================")
     print("  HapticSync Remote PC Web Dashboard")
-    print(f"  Target Raspberry Pi : {RPI_HOST}:{RPI_PORT}")
+    if USE_MQTT:
+        print(f"  Mode                : MQTT Subscriber")
+        print(f"  MQTT Broker         : {MQTT_BROKER}:{MQTT_PORT}")
+    else:
+        print(f"  Mode                : Direct TCP Stream")
+        print(f"  Target Raspberry Pi : {RPI_HOST}:{RPI_PORT}")
     print(f"  Local Web Dashboard : http://localhost:{LOCAL_WEB_PORT}")
     print(f"  Pipeline Monitor   : http://localhost:{LOCAL_WEB_PORT}/pipeline")
     print("==========================================================")
 
-    # Start TCP receiver thread
-    t = threading.Thread(target=rpi_receiver_loop, daemon=True)
+    # Start telemetry receiver thread (MQTT or TCP)
+    if USE_MQTT:
+        t = threading.Thread(target=mqtt_receiver_loop, daemon=True)
+    else:
+        t = threading.Thread(target=rpi_receiver_loop, daemon=True)
     t.start()
 
     # Run local web server on PC

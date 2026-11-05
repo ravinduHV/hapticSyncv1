@@ -316,17 +316,35 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:'Inte
       </div>
 
       <div class="stat-section">
-        <div class="stat-title">Step Latency Breakdown (Avg)</div>
+        <div class="stat-title">Step Latency (SHM-derived)</div>
         <div class="timing-list" id="timing-list">
-          <div class="timing-row"><span class="timing-row-lbl">🎙️ 1. Audio Record (wait)</span><span class="timing-row-val" id="st-rec">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl">🔀 2. Stereo → Mono</span><span class="timing-row-val" id="st-pre">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl">⚡ 3. Dual FFT Analysis</span><span class="timing-row-val" id="st-fft">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl">🧬 4. Feature Processor</span><span class="timing-row-val" id="st-proc">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl">🧠 5. Model Forward Pass</span><span class="timing-row-val" id="st-fwd">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl">🔤 6. CTC Greedy Decode</span><span class="timing-row-val" id="st-dec">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🧠 Model Forward Pass</span><span class="timing-row-val" id="st-fwd">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🔤 CTC Decode</span><span class="timing-row-val" id="st-dec">—</span></div>
           <div class="timing-divider"></div>
-          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⚡ Pure Compute (2-6)</span><span class="timing-row-val" id="st-comp" style="color:var(--cyan)">—</span></div>
-          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⏱️ Total Turnaround</span><span class="timing-row-val" id="st-tot" style="color:var(--purple)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⚡ Pure Compute</span><span class="timing-row-val" id="st-comp" style="color:var(--cyan)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl" style="color:var(--text1);font-weight:600">⏱️ End-to-End Lag</span><span class="timing-row-val" id="st-tot" style="color:var(--purple)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">📊 Min Lag</span><span class="timing-row-val" id="st-lag-min">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">📊 Avg Lag</span><span class="timing-row-val" id="st-lag-avg">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">📊 Max Lag</span><span class="timing-row-val" id="st-lag-max">—</span></div>
+        </div>
+      </div>
+
+      <div class="stat-section">
+        <div class="stat-title">Pipeline Accumulation Stats</div>
+        <div class="timing-list">
+          <div class="timing-row"><span class="timing-row-lbl">⏱️ Uptime</span><span class="timing-row-val" id="acc-uptime" style="color:var(--green)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🎙️ Periods Captured</span><span class="timing-row-val" id="acc-periods">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🎙️ Capture Rate</span><span class="timing-row-val" id="acc-caprate">—</span></div>
+          <div class="timing-divider"></div>
+          <div class="timing-row"><span class="timing-row-lbl">🪟 Windows Sent</span><span class="timing-row-val" id="acc-wins-sent">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">✅ Windows Done</span><span class="timing-row-val" id="acc-wins-done" style="color:var(--green)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">🗑️ Windows Dropped</span><span class="timing-row-val" id="acc-wins-drop" style="color:var(--amber)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">📉 Drop Rate</span><span class="timing-row-val" id="acc-droprate" style="color:var(--amber)">—</span></div>
+          <div class="timing-divider"></div>
+          <div class="timing-row"><span class="timing-row-lbl">🔤 Events Emitted</span><span class="timing-row-val" id="acc-events">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">📡 Events/sec</span><span class="timing-row-val" id="acc-evtrate" style="color:var(--cyan)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">⚠️ XRUNs</span><span class="timing-row-val" id="acc-xruns" style="color:var(--red)">—</span></div>
+          <div class="timing-row"><span class="timing-row-lbl">⚠️ Gaps</span><span class="timing-row-val" id="acc-gaps" style="color:var(--red)">—</span></div>
         </div>
       </div>
 
@@ -524,9 +542,9 @@ function buildCard(chunk){
   card.dataset.phonemeStr = chunk.phoneme_str;
 
   const t = chunk.timing || {
-    record: 500.0, preprocess: 0.1, fft: 0.4, processor: 1.2,
-    forward: chunk.inference_ms || 15.0, decode: 0.2,
-    compute: chunk.inference_ms || 16.9, total: (chunk.inference_ms || 16.9) + 500.0
+    forward: chunk.inference_ms || 0,
+    compute: chunk.inference_ms || 0,
+    total:   chunk.inference_ms || 0,
   };
 
   card.innerHTML = `
@@ -534,16 +552,9 @@ function buildCard(chunk){
       <span class="card-idx">#${String(chunk.index).padStart(5,'0')}</span>
       <span class="card-time">${fmtTime(chunk.timestamp)}</span>
       <span class="card-inf" title="Compute: ${t.compute} ms | Total: ${t.total} ms">⚡ ${t.compute} ms</span>
-      <button class="play-btn" id="play-${chunk.id}" onclick="playChunk('${chunk.audio_url}','${chunk.id}','${chunk.phoneme_str}')" title="Play audio">▶</button>
     </div>
     <div class="waveform-wrap">
       <canvas class="waveform-canvas" height="52" data-l='${JSON.stringify(chunk.waveform_l)}' data-r='${JSON.stringify(chunk.waveform_r)}'></canvas>
-      <div class="wave-legend">
-        <span><i class="lc"></i> Left</span>
-        <span style="margin-left:4px"><i class="rc"></i> Right</span>
-        <span style="margin-left:auto">${chunk.dom_freq_l.toFixed(0)} Hz</span>
-        <span style="margin-left:8px">${chunk.dom_freq_r.toFixed(0)} Hz</span>
-      </div>
     </div>
     <div class="phoneme-row">${pillsHTML(chunk.phonemes)}</div>
     <div class="card-meta">
@@ -558,13 +569,9 @@ function buildCard(chunk){
       </div>
     </div>
     <div class="card-timings">
-      <span class="timing-badge" title="Step 1: Audio record buffer wait">🎙️ Rec: <b>${t.record}ms</b></span>
-      <span class="timing-badge" title="Step 2: Stereo to mono preprocessing">🔀 Pre: <b>${t.preprocess}ms</b></span>
-      <span class="timing-badge" title="Step 3: Dual FFT spectral analysis">⚡ FFT: <b>${t.fft}ms</b></span>
-      <span class="timing-badge" title="Step 4: Wav2Vec2 feature extraction">🧬 Proc: <b>${t.processor}ms</b></span>
-      <span class="timing-badge fwd" title="Step 5: Model forward pass (neural network)">🧠 Model: <b>${t.forward}ms</b></span>
-      <span class="timing-badge" title="Step 6: CTC greedy decoding">🔤 CTC: <b>${t.decode}ms</b></span>
-      <span class="timing-badge highlight" style="margin-left:auto" title="Pure Compute Latency (Steps 2-6)">⚡ Comp: <b>${t.compute}ms</b></span>
+      <span class="timing-badge fwd" title="Model forward pass (Wav2Vec2 CTC)">🧠 Model: <b>${t.forward}ms</b></span>
+      <span class="timing-badge highlight" style="margin-left:auto" title="Pure Compute Latency (model forward)">⚡ Comp: <b>${t.compute}ms</b></span>
+      <span class="timing-badge" title="End-to-end pipeline lag from audio frame to phoneme emit">⏱️ Lag: <b>${t.total}ms</b></span>
     </div>`;
 
   return card;
@@ -674,18 +681,34 @@ async function fetchStats(){
       </div>`;
     });
 
-    // Step latency breakdown
+    // Step latency — only real SHM-derived values
     if(d.avg_timing){
       const at = d.avg_timing;
-      if(document.getElementById('st-rec')) document.getElementById('st-rec').textContent = at.record ? at.record.toFixed(1)+'ms' : '—';
-      if(document.getElementById('st-pre')) document.getElementById('st-pre').textContent = at.preprocess ? at.preprocess.toFixed(2)+'ms' : '—';
-      if(document.getElementById('st-fft')) document.getElementById('st-fft').textContent = at.fft ? at.fft.toFixed(2)+'ms' : '—';
-      if(document.getElementById('st-proc')) document.getElementById('st-proc').textContent = at.processor ? at.processor.toFixed(2)+'ms' : '—';
-      if(document.getElementById('st-fwd')) document.getElementById('st-fwd').textContent = at.forward ? at.forward.toFixed(1)+'ms' : '—';
-      if(document.getElementById('st-dec')) document.getElementById('st-dec').textContent = at.decode ? at.decode.toFixed(2)+'ms' : '—';
+      const fwd = at.forward || at.compute || 0;
+      if(document.getElementById('st-fwd')) document.getElementById('st-fwd').textContent = fwd ? fwd.toFixed(1)+'ms' : '—';
+      if(document.getElementById('st-dec')) document.getElementById('st-dec').textContent = '—'; // not separately measured
       if(document.getElementById('st-comp')) document.getElementById('st-comp').textContent = at.compute ? at.compute.toFixed(1)+'ms' : '—';
       if(document.getElementById('st-tot')) document.getElementById('st-tot').textContent = at.total ? at.total.toFixed(1)+'ms' : '—';
     }
+
+    // Lag stats
+    if(document.getElementById('st-lag-min')) document.getElementById('st-lag-min').textContent = d.min_lag_ms ? d.min_lag_ms.toFixed(1)+'ms' : '—';
+    if(document.getElementById('st-lag-avg')) document.getElementById('st-lag-avg').textContent = d.avg_lag_ms ? d.avg_lag_ms.toFixed(1)+'ms' : '—';
+    if(document.getElementById('st-lag-max')) document.getElementById('st-lag-max').textContent = d.max_lag_ms ? d.max_lag_ms.toFixed(1)+'ms' : '—';
+
+    // Accumulation panel
+    function fmtUp(s){ const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
+    if(document.getElementById('acc-uptime')) document.getElementById('acc-uptime').textContent = d.uptime_s ? fmtUp(d.uptime_s) : '—';
+    if(document.getElementById('acc-periods')) document.getElementById('acc-periods').textContent = d.periods_captured != null ? d.periods_captured.toLocaleString() : '—';
+    if(document.getElementById('acc-caprate')) document.getElementById('acc-caprate').textContent = d.capture_rate_hz != null ? d.capture_rate_hz+' p/s' : '—';
+    if(document.getElementById('acc-wins-sent')) document.getElementById('acc-wins-sent').textContent = d.windows_sent != null ? d.windows_sent.toLocaleString() : '—';
+    if(document.getElementById('acc-wins-done')) document.getElementById('acc-wins-done').textContent = d.windows_done != null ? d.windows_done.toLocaleString()+' ('+d.window_done_pct+'%)' : '—';
+    if(document.getElementById('acc-wins-drop')) document.getElementById('acc-wins-drop').textContent = d.windows_dropped != null ? d.windows_dropped.toLocaleString() : '—';
+    if(document.getElementById('acc-droprate')) document.getElementById('acc-droprate').textContent = d.drop_rate_pct != null ? d.drop_rate_pct+'%' : '—';
+    if(document.getElementById('acc-events')) document.getElementById('acc-events').textContent = d.events_emitted != null ? d.events_emitted.toLocaleString() : '—';
+    if(document.getElementById('acc-evtrate')) document.getElementById('acc-evtrate').textContent = d.events_per_sec != null ? d.events_per_sec+' /s' : '—';
+    if(document.getElementById('acc-xruns')) document.getElementById('acc-xruns').textContent = d.xruns != null ? d.xruns : '—';
+    if(document.getElementById('acc-gaps')) document.getElementById('acc-gaps').textContent = d.gaps != null ? d.gaps : '—';
   }catch(e){}
 }
 

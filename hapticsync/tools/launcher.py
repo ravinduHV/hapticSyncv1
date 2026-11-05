@@ -28,6 +28,10 @@ def parse_args():
                         help="Configure audio source to ALSA loopback (hw:Loopback,1,0)")
     parser.add_argument("--web", action="store_true",
                         help="Run full web server on Raspberry Pi (port 5000) instead of lightweight publisher (port 5555)")
+    parser.add_argument("--mqtt", action="store_true",
+                        help="Use MQTT publisher (telemetry/mqtt_publisher.py) instead of TCP publisher")
+    parser.add_argument("--mqtt-broker", default=None,
+                        help="MQTT broker IP address (e.g. your PC's IP)")
     parser.add_argument("--telem-port", type=int, default=None,
                         help="Override telemetry port (default: 5555 for publisher, 5000 for web)")
     return parser.parse_args()
@@ -240,16 +244,23 @@ def main():
     if cfg.get("telemetry", {}).get("enabled", True) and cfg.get("telemetry", {}).get("dashboard", True):
         hk_cpus = ",".join(str(c) for c in cfg.get("cpus", {}).get("housekeeping", [0]))
         use_web = args.web or cfg.get("telemetry", {}).get("mode") == "web"
+        use_mqtt = args.mqtt or cfg.get("telemetry", {}).get("mode") == "mqtt"
         port = args.telem_port or (5000 if use_web else 5555)
 
         if use_web:
             telem_script = "telemetry/main.py"
             telem_label = f"local web dashboard (port {port})"
+            telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
+        elif use_mqtt:
+            telem_script = "telemetry/mqtt_publisher.py"
+            broker = args.mqtt_broker or cfg.get("telemetry", {}).get("mqtt_broker", "192.168.8.1")
+            telem_label = f"MQTT telemetry publisher (broker {broker})"
+            telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH, "--broker", broker]
         else:
             telem_script = "telemetry/publisher.py"
             telem_label = f"ultra-lightweight telemetry publisher (port {port})"
+            telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
 
-        telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
         if sys.platform.startswith("linux"):
             telem_cmd = ["taskset", "-c", hk_cpus] + telem_cmd
 
