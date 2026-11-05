@@ -2,6 +2,7 @@
 """
 launcher.py — Supervisor and orchestration service (Section 5.8)
 Sets up socketpairs, CPU tasksets, process lifecycle, and clean shutdown.
+Supports hardware I2S mic or software I2S simulator (snd-aloop).
 """
 
 import os
@@ -11,10 +12,41 @@ import socket
 import signal
 import subprocess
 import json
+import argparse
 
-CONFIG_PATH = sys.argv[1] if len(sys.argv) > 1 else "config/hapticsync.json"
+def parse_args():
+    parser = argparse.ArgumentParser(description="Haptic-Sync Real-Time Phoneme Streamer Launcher")
+    parser.add_argument("config", nargs="?", default="config/hapticsync.json",
+                        help="Path to JSON configuration file (default: config/hapticsync.json)")
+    parser.add_argument("--sim", action="store_true",
+                        help="Start software I2S mic simulator (i2s_mic_simulator.py via ALSA loopback)")
+    parser.add_argument("--sim-source", choices=["sine", "noise", "wav"], default="sine",
+                        help="Audio generator mode for I2S simulator: sine, noise, or wav (default: sine)")
+    parser.add_argument("--sim-wav", metavar="FILE", default=None,
+                        help="WAV file path to stream through simulator (required if --sim-source=wav)")
+    parser.add_argument("--loopback", action="store_true",
+                        help="Configure audio source to ALSA loopback (hw:Loopback,1,0)")
+    return parser.parse_args()
+
+args = parse_args()
+CONFIG_PATH = args.config
 with open(CONFIG_PATH, "r") as f:
     cfg = json.load(f)
+
+# If --sim or --loopback specified, adapt audio config
+config_modified = False
+if args.sim or args.loopback or cfg.get("audio", {}).get("source") == "loopback":
+    cfg["audio"]["source"] = "loopback"
+    if cfg["audio"].get("alsa_device") in ["hw:0,0", "", None]:
+        cfg["audio"]["alsa_device"] = "hw:Loopback,1,0"
+    config_modified = True
+
+# Also write to temporary runtime config if CLI overrides were given
+RUNTIME_CONFIG_PATH = CONFIG_PATH
+if config_modified and (args.sim or args.loopback):
+    RUNTIME_CONFIG_PATH = "config/runtime_hapticsync.json"
+    with open(RUNTIME_CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
 
 procs = {}
 sockpairs = []
@@ -24,7 +56,7 @@ def cleanup():
     """Terminate child processes in reverse dependency order."""
     print("\n[launcher] Shutting down pipeline processes...")
 
-    order = ["producer", "inference", "postproc", "telemetry"]
+    order = ["producer", "inference", "postproc", "telemetry", "simulator"]
     for name in order:
         p = procs.get(name)
         if p and p.poll() is None:
@@ -77,7 +109,41 @@ def main():
     if os.path.exists(check_script) and sys.platform.startswith("linux"):
         subprocess.run(["bash", check_script])
 
-    # 2. Create socketpairs (AF_UNIX, SOCK_SEQPACKET)
+    # 2. Start I2S Mic Simulator if requested or if source is loopback
+    use_sim = args.sim or (cfg.get("audio", {}).get("source") == "loopback")
+    if use_sim:
+        print("[launcher] Initializing I2S Mic Simulator integration...")
+        if sys.platform.startswith("linux"):
+            try:
+                subprocess.run(["sudo", "modprobe", "snd-aloop"], check=False)
+            except Exception:
+                pass
+
+        # Locate i2s_mic_simulator.py
+        candidate_sim_paths = [
+            os.path.abspath("i2s_mic_simulator.py"),
+            os.path.abspath("../i2s_mic_simulator.py"),
+            os.path.abspath("../../i2s_mic_simulator.py"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "i2s_mic_simulator.py"),
+        ]
+        sim_script = None
+        for p in candidate_sim_paths:
+            if os.path.exists(p):
+                sim_script = p
+                break
+
+        if sim_script:
+            sim_cmd = [sys.executable, sim_script, "--source", args.sim_source]
+            if args.sim_wav:
+                sim_cmd += ["--wav", args.sim_wav]
+
+            print(f"[launcher] Spawning I2S simulator: {' '.join(sim_cmd)}")
+            procs["simulator"] = subprocess.Popen(sim_cmd)
+            time.sleep(1.5)  # Wait for ALSA Loopback device to open
+        else:
+            print("[launcher] WARNING: i2s_mic_simulator.py not found; ensure simulator is running externally.")
+
+    # 3. Create socketpairs (AF_UNIX, SOCK_SEQPACKET)
     # pair 1: assembler <-> inference
     s_assem, s_infer = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     # pair 2: inference <-> postproc
@@ -104,12 +170,12 @@ def main():
 
     env_base = os.environ.copy()
 
-    # 3. Start Post-Process (CPU 3)
+    # 4. Start Post-Process (CPU 3)
     post_cpu = cfg.get("cpus", {}).get("post", 3)
     env_post = env_base.copy()
     env_post["HAPTICSYNC_RESULT_FD"] = str(s_result.fileno())
 
-    post_cmd = ["./build/postproc_bin", CONFIG_PATH]
+    post_cmd = ["./build/postproc_bin", RUNTIME_CONFIG_PATH]
     if sys.platform.startswith("linux"):
         post_cmd = ["taskset", "-c", str(post_cpu)] + post_cmd
 
@@ -124,13 +190,13 @@ def main():
         print("[launcher] postproc_bin not found. Run CMake build first!")
         sys.exit(1)
 
-    # 4. Start Inference Worker (CPU 2)
+    # 5. Start Inference Worker (CPU 2)
     model_cpus = ",".join(str(c) for c in cfg.get("cpus", {}).get("model", [2]))
     env_infer = env_base.copy()
     env_infer["HAPTICSYNC_INFER_FD"] = str(s_infer.fileno())
     env_infer["HAPTICSYNC_POST_FD"] = str(s_post.fileno())
 
-    infer_cmd = [sys.executable, "inference/main.py", CONFIG_PATH]
+    infer_cmd = [sys.executable, "inference/main.py", RUNTIME_CONFIG_PATH]
     if sys.platform.startswith("linux"):
         infer_cmd = ["taskset", "-c", model_cpus] + infer_cmd
 
@@ -145,12 +211,12 @@ def main():
     print("[launcher] Waiting for model warm-up...")
     time.sleep(3.0)
 
-    # 5. Start Producer Process (CPU 1)
+    # 6. Start Producer Process (CPU 1)
     prod_cpu = cfg.get("cpus", {}).get("producer", 1)
     env_prod = env_base.copy()
     env_prod["HAPTICSYNC_ASSEM_FD"] = str(s_assem.fileno())
 
-    prod_cmd = ["./build/producer_bin", CONFIG_PATH]
+    prod_cmd = ["./build/producer_bin", RUNTIME_CONFIG_PATH]
     if sys.platform.startswith("linux"):
         prod_cmd = ["taskset", "-c", str(prod_cpu)] + prod_cmd
 
@@ -166,10 +232,10 @@ def main():
         cleanup()
         sys.exit(1)
 
-    # 6. Start Telemetry Dashboard (CPU 0)
+    # 7. Start Telemetry Dashboard (CPU 0)
     if cfg.get("telemetry", {}).get("dashboard", True):
         hk_cpus = ",".join(str(c) for c in cfg.get("cpus", {}).get("housekeeping", [0]))
-        telem_cmd = [sys.executable, "telemetry/main.py", CONFIG_PATH]
+        telem_cmd = [sys.executable, "telemetry/main.py", RUNTIME_CONFIG_PATH]
         if sys.platform.startswith("linux"):
             telem_cmd = ["taskset", "-c", hk_cpus] + telem_cmd
 
@@ -193,4 +259,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

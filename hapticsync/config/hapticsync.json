@@ -1,9 +1,9 @@
 {
   "cpus": { "housekeeping": [0], "producer": 1, "model": [2], "post": 3 },
-  "rt": { "require_rt": true, "irq_thread_prio": 60, "producer_prio": 50 },
+  "rt": { "require_rt": false, "irq_thread_prio": 60, "producer_prio": 50 },
   "audio": {
-    "source": "alsa",
-    "alsa_device": "hw:0,0",
+    "source": "loopback",
+    "alsa_device": "hw:Loopback,1,0",
     "rate": 16000,
     "channels": 2,
     "period_frames": 160,

@@ -1,9 +1,11 @@
 // alsa_source.cpp — ALSA direct capture implementation (Section 5.2.2)
 
 #include "alsa_source.h"
+#include "../common/rt_util.h"
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace hs {
 
@@ -19,12 +21,37 @@ AlsaSource::~AlsaSource() {
 #ifdef __linux__
 
 bool AlsaSource::open() {
-    int err;
+    int err = -1;
 
-    err = snd_pcm_open(&pcm_, device_.c_str(), SND_PCM_STREAM_CAPTURE, 0);
-    if (err < 0) {
-        std::fprintf(stderr, "[alsa] Cannot open %s: %s\n",
-                     device_.c_str(), snd_strerror(err));
+    // List of candidate device strings to try if configured device is "loopback"
+    std::vector<std::string> candidates;
+    if (device_ == "loopback" || device_ == "aloop") {
+        candidates.push_back("hw:Loopback,1,0");
+        candidates.push_back("hw:Loopback,1");
+        candidates.push_back("plughw:Loopback,1");
+        candidates.push_back("hw:1,1");
+        candidates.push_back("plughw:1,1");
+    } else {
+        candidates.push_back(device_);
+        // If device has Loopback, add plughw fallback
+        if (device_.find("Loopback") != std::string::npos && device_.rfind("plug", 0) != 0) {
+            candidates.push_back("plug" + device_);
+        }
+    }
+
+    for (const auto& dev : candidates) {
+        err = snd_pcm_open(&pcm_, dev.c_str(), SND_PCM_STREAM_CAPTURE, 0);
+        if (err == 0) {
+            active_device_ = dev;
+            std::fprintf(stderr, "[alsa] Successfully opened ALSA capture device: %s\n", dev.c_str());
+            break;
+        } else {
+            std::fprintf(stderr, "[alsa] Could not open %s: %s\n", dev.c_str(), snd_strerror(err));
+        }
+    }
+
+    if (err < 0 || !pcm_) {
+        std::fprintf(stderr, "[alsa] FATAL: Failed to open any ALSA capture device.\n");
         return false;
     }
 
@@ -35,21 +62,29 @@ bool AlsaSource::open() {
 
     snd_pcm_hw_params_set_access(pcm_, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
 
-    // Try S32_LE first (common for I2S MEMS mics), fallback to S16_LE
+    // Try S32_LE first (common for I2S MEMS mics), then S16_LE, then FLOAT_LE
     err = snd_pcm_hw_params_set_format(pcm_, hw, SND_PCM_FORMAT_S32_LE);
     if (err == 0) {
-        is_s32_ = true;
+        format_ = FORMAT_S32_LE;
         sample_bytes_ = 4;
         std::fprintf(stderr, "[alsa] Format: S32_LE\n");
     } else {
         err = snd_pcm_hw_params_set_format(pcm_, hw, SND_PCM_FORMAT_S16_LE);
-        if (err < 0) {
-            std::fprintf(stderr, "[alsa] Cannot set format: %s\n", snd_strerror(err));
-            return false;
+        if (err == 0) {
+            format_ = FORMAT_S16_LE;
+            sample_bytes_ = 2;
+            std::fprintf(stderr, "[alsa] Format: S16_LE\n");
+        } else {
+            err = snd_pcm_hw_params_set_format(pcm_, hw, SND_PCM_FORMAT_FLOAT_LE);
+            if (err == 0) {
+                format_ = FORMAT_FLOAT_LE;
+                sample_bytes_ = 4;
+                std::fprintf(stderr, "[alsa] Format: FLOAT_LE\n");
+            } else {
+                std::fprintf(stderr, "[alsa] Cannot set format (S32/S16/FLOAT): %s\n", snd_strerror(err));
+                return false;
+            }
         }
-        is_s32_ = false;
-        sample_bytes_ = 2;
-        std::fprintf(stderr, "[alsa] Format: S16_LE\n");
     }
 
     unsigned int actual_rate = static_cast<unsigned int>(rate_);
@@ -96,21 +131,27 @@ bool AlsaSource::open() {
     snd_pcm_sw_params_current(pcm_, sw);
 
     snd_pcm_sw_params_set_avail_min(pcm_, sw, period);
-    // Enable MONOTONIC timestamps
+    // Enable MONOTONIC timestamps (graceful fallback if unsupported by virtual/loopback device)
     snd_pcm_sw_params_set_tstamp_mode(pcm_, sw, SND_PCM_TSTAMP_ENABLE);
     snd_pcm_sw_params_set_tstamp_type(pcm_, sw, SND_PCM_TSTAMP_TYPE_MONOTONIC);
 
     err = snd_pcm_sw_params(pcm_, sw);
     if (err < 0) {
-        std::fprintf(stderr, "[alsa] Cannot apply sw params: %s\n", snd_strerror(err));
-        return false;
+        // Fallback without explicit monotonic type
+        snd_pcm_sw_params_current(pcm_, sw);
+        snd_pcm_sw_params_set_avail_min(pcm_, sw, period);
+        snd_pcm_sw_params_set_tstamp_mode(pcm_, sw, SND_PCM_TSTAMP_ENABLE);
+        err = snd_pcm_sw_params(pcm_, sw);
+        if (err < 0) {
+            std::fprintf(stderr, "[alsa] WARNING: Cannot apply sw params: %s (continuing with default sw params)\n", snd_strerror(err));
+        }
     }
 
     // Allocate status for timestamps
     snd_pcm_status_malloc(&status_);
 
     std::fprintf(stderr, "[alsa] Opened %s: rate=%u ch=%d period=%lu buf=%lu\n",
-                 device_.c_str(), actual_rate, channels_,
+                 active_device_.c_str(), actual_rate, channels_,
                  (unsigned long)period, (unsigned long)buffer);
 
     return true;
@@ -128,13 +169,17 @@ int AlsaSource::read(void* buf, int frames) {
 }
 
 int64_t AlsaSource::get_timestamp() {
-    if (!pcm_ || !status_) return 0;
+    if (!pcm_ || !status_) return monotonic_ns();
 
     snd_pcm_status(pcm_, status_);
     snd_htimestamp_t ts;
     snd_pcm_status_get_htstamp(status_, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000000LL
-         + static_cast<int64_t>(ts.tv_nsec);
+    int64_t ns = static_cast<int64_t>(ts.tv_sec) * 1000000000LL
+               + static_cast<int64_t>(ts.tv_nsec);
+    if (ns <= 0) {
+        return monotonic_ns();
+    }
+    return ns;
 }
 
 void AlsaSource::close() {
@@ -184,11 +229,12 @@ bool AlsaSource::open() {
     return false;
 }
 int AlsaSource::read(void*, int) { return -1; }
-int64_t AlsaSource::get_timestamp() { return 0; }
+int64_t AlsaSource::get_timestamp() { return monotonic_ns(); }
 void AlsaSource::close() {}
 bool AlsaSource::handle_xrun(int) { return false; }
 
 #endif // __linux__
 
 } // namespace hs
+
 

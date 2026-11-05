@@ -30,10 +30,15 @@ static void sig_handler(int) {
 
 // Interleaved to float32 mono downmix
 static inline float downmix_sample(const void* raw, int frame_idx, int channels,
-                                   bool is_s32, const std::string& mode)
+                                   SampleFormat fmt, const std::string& mode)
 {
     float ch[8] = {0.0f};
-    if (is_s32) {
+    if (fmt == FORMAT_FLOAT_LE) {
+        const float* p = reinterpret_cast<const float*>(raw) + frame_idx * channels;
+        for (int c = 0; c < channels && c < 8; ++c) {
+            ch[c] = p[c];
+        }
+    } else if (fmt == FORMAT_S32_LE) {
         const int32_t* p = reinterpret_cast<const int32_t*>(raw) + frame_idx * channels;
         for (int c = 0; c < channels && c < 8; ++c) {
             ch[c] = static_cast<float>(p[c]) / 2147483648.0f; // 2^31
@@ -182,7 +187,7 @@ int main(int argc, char* argv[]) {
         } else {
             int frame_bytes = wav.file_channels() * (wav.file_bits() / 8);
             std::vector<uint8_t> raw_buf(period * frame_bytes);
-            bool is_s32 = (wav.file_bits() == 32);
+            SampleFormat fmt = (wav.file_bits() == 32) ? FORMAT_S32_LE : FORMAT_S16_LE;
 
             while (g_running.load(std::memory_order_relaxed)) {
                 int n = wav.read(raw_buf.data(), period);
@@ -190,7 +195,7 @@ int main(int argc, char* argv[]) {
                 int64_t t_ns = wav.get_timestamp();
 
                 for (int i = 0; i < n; ++i) {
-                    mono_buf[i] = downmix_sample(raw_buf.data(), i, wav.file_channels(), is_s32, cfg.audio.channel_mode);
+                    mono_buf[i] = downmix_sample(raw_buf.data(), i, wav.file_channels(), fmt, cfg.audio.channel_mode);
                 }
                 audio_writer.write(mono_buf.data(), n, t_ns);
                 stats->periods_captured.fetch_add(1, std::memory_order_relaxed);
@@ -207,22 +212,31 @@ int main(int argc, char* argv[]) {
             int n = synth.read(raw_buf.data(), period);
             int64_t t_ns = synth.get_timestamp();
             for (int i = 0; i < n; ++i) {
-                mono_buf[i] = downmix_sample(raw_buf.data(), i, channels, true, cfg.audio.channel_mode);
+                mono_buf[i] = downmix_sample(raw_buf.data(), i, channels, FORMAT_FLOAT_LE, cfg.audio.channel_mode);
             }
             audio_writer.write(mono_buf.data(), n, t_ns);
             stats->periods_captured.fetch_add(1, std::memory_order_relaxed);
             stats->samples_captured.fetch_add(n, std::memory_order_relaxed);
         }
-    } else { // ALSA hardware capture (default)
-        std::fprintf(stderr, "[producer] Using ALSA hardware capture: %s\n", cfg.audio.alsa_device.c_str());
-        AlsaSource alsa(cfg.audio.alsa_device, cfg.audio.rate, channels,
+    } else { // ALSA hardware or Loopback capture (default)
+        std::string target_dev = cfg.audio.alsa_device;
+        if (cfg.audio.source == "loopback") {
+            if (target_dev == "hw:0,0" || target_dev.empty()) {
+                target_dev = "loopback"; // AlsaSource will try candidates
+            }
+            std::fprintf(stderr, "[producer] Using ALSA Loopback capture (for I2S simulator): %s\n", target_dev.c_str());
+        } else {
+            std::fprintf(stderr, "[producer] Using ALSA hardware capture: %s\n", target_dev.c_str());
+        }
+
+        AlsaSource alsa(target_dev, cfg.audio.rate, channels,
                         cfg.audio.period_frames, cfg.audio.buffer_periods);
         if (!alsa.open()) {
-            std::fprintf(stderr, "[producer] Failed opening ALSA device %s\n", cfg.audio.alsa_device.c_str());
+            std::fprintf(stderr, "[producer] Failed opening ALSA device %s\n", target_dev.c_str());
             g_running.store(false, std::memory_order_relaxed);
         } else {
-            std::vector<uint8_t> raw_buf(period * channels * 4); // max for S32
-            bool is_s32 = alsa.is_s32();
+            std::vector<uint8_t> raw_buf(period * channels * 4); // max for S32/Float
+            SampleFormat fmt = alsa.format();
 
             while (g_running.load(std::memory_order_relaxed)) {
                 int n = alsa.read(raw_buf.data(), period);
@@ -235,7 +249,7 @@ int main(int argc, char* argv[]) {
 
                 int64_t t_ns = alsa.get_timestamp();
                 for (int i = 0; i < n; ++i) {
-                    mono_buf[i] = downmix_sample(raw_buf.data(), i, channels, is_s32, cfg.audio.channel_mode);
+                    mono_buf[i] = downmix_sample(raw_buf.data(), i, channels, fmt, cfg.audio.channel_mode);
                 }
                 audio_writer.write(mono_buf.data(), n, t_ns);
                 stats->periods_captured.fetch_add(1, std::memory_order_relaxed);

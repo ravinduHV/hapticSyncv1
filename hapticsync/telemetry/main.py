@@ -72,21 +72,140 @@ _chunk_counter = 0
 _lock = threading.Lock()
 
 
+def decode_throttled(val_str):
+    try:
+        val = int(val_str, 16) if isinstance(val_str, str) else int(val_str)
+    except Exception:
+        return []
+    flags = []
+    if val & 0x1: flags.append("Under-voltage detected (active)")
+    if val & 0x2: flags.append("Arm frequency capped (active)")
+    if val & 0x4: flags.append("Currently throttled (active)")
+    if val & 0x8: flags.append("Soft temperature limit active")
+    if val & 0x10000: flags.append("Under-voltage occurred previously")
+    if val & 0x20000: flags.append("Arm frequency capping occurred previously")
+    if val & 0x40000: flags.append("Throttling occurred previously")
+    if val & 0x80000: flags.append("Soft temperature limit occurred previously")
+    return flags
+
+
+def is_simulator_running():
+    try:
+        out = subprocess.check_output(["pgrep", "-f", "i2s_mic_simulator.py"], text=True)
+        return len(out.strip().splitlines()) > 0
+    except Exception:
+        return False
+
+
 def read_system_telemetry():
-    info = {"temp_c": 0.0, "freq_mhz": 0, "throttled": "0x0"}
+    info = {"temp_c": 0.0, "freq_mhz": 2400, "throttled": "0x0", "throttled_flags": []}
     try:
         out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
-        info["temp_c"] = float(out.replace("temp=", "").replace("'C\n", ""))
+        info["temp_c"] = float(out.replace("temp=", "").replace("'C\n", "").strip())
     except Exception:
         pass
 
     try:
         out = subprocess.check_output(["vcgencmd", "get_throttled"], text=True)
-        info["throttled"] = out.strip()
+        val = out.strip().replace("throttled=", "")
+        info["throttled"] = val
+        info["throttled_flags"] = decode_throttled(val)
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(["vcgencmd", "measure_clock", "arm"], text=True)
+        hz = int(out.strip().split("=")[1])
+        info["freq_mhz"] = round(hz / 1e6)
     except Exception:
         pass
 
     return info
+
+
+def analyze_bottlenecks(stats, sys_info, cfg):
+    bottlenecks = []
+    status = "healthy"
+
+    # 1. Inference Real-Time Factor
+    win_ms = cfg.get("window", {}).get("fixed_window_ms", 1000)
+    infer_ms = stats.get("last_infer_ms", 0.0)
+    rtf = round(infer_ms / max(win_ms, 1), 2) if infer_ms > 0 else 0.0
+
+    if rtf > 1.0:
+        bottlenecks.append({
+            "stage": "Wav2Vec2 Inference (CPU 2)",
+            "severity": "critical" if rtf > 1.5 else "warning",
+            "message": f"RTF is {rtf:.2f} (> 1.0). Inference takes {infer_ms:.0f}ms per {win_ms}ms audio. Real-time catchup not sustainable on 1 core.",
+            "recommendation": "Maintain 'latest' policy (drops stale audio windows to keep end-to-end lag low)."
+        })
+        if status == "healthy":
+            status = "warning"
+
+    # 2. Window Dropping
+    dropped = stats.get("windows_dropped", 0)
+    sent = stats.get("windows_sent", 0)
+    if sent > 0 and dropped > 0:
+        drop_rate = round((dropped / sent) * 100, 1)
+        if drop_rate > 10:
+            bottlenecks.append({
+                "stage": "Assembler Window Queue",
+                "severity": "warning",
+                "message": f"{dropped} audio windows dropped ({drop_rate}% drop rate) due to busy inference worker.",
+                "recommendation": "Expected behavior for 'latest' policy when RTF > 1.0 to preserve freshness."
+            })
+
+    # 3. Audio XRUNs / Gaps
+    xruns = stats.get("xruns", 0)
+    gaps = stats.get("gaps", 0)
+    if xruns > 0:
+        bottlenecks.append({
+            "stage": "Audio Producer (ALSA)",
+            "severity": "warning",
+            "message": f"{xruns} buffer overrun/underrun (XRUN) events detected on audio capture.",
+            "recommendation": "Increase buffer_periods or grant SCHED_FIFO capability to producer_bin."
+        })
+    if gaps > 0:
+        bottlenecks.append({
+            "stage": "Audio Ring Buffer",
+            "severity": "warning",
+            "message": f"{gaps} sample discontinuities detected between captured periods.",
+            "recommendation": "Check audio source clock stability or system IRQ load."
+        })
+
+    # 4. Thermal & Throttling
+    temp = sys_info.get("temp_c", 0.0)
+    if temp >= 80.0:
+        bottlenecks.append({
+            "stage": "SoC Thermals",
+            "severity": "critical",
+            "message": f"CPU temperature is {temp:.1f}°C (thermal threshold exceeded). Frequency throttling active.",
+            "recommendation": "Verify Raspberry Pi 5 active cooler fan is operating."
+        })
+        status = "critical"
+    elif temp >= 70.0:
+        bottlenecks.append({
+            "stage": "SoC Thermals",
+            "severity": "warning",
+            "message": f"CPU temperature is {temp:.1f}°C (warm).",
+            "recommendation": "Ensure airflow around RPi enclosure."
+        })
+
+    th_flags = sys_info.get("throttled_flags", [])
+    if any("active" in f.lower() for f in th_flags):
+        bottlenecks.append({
+            "stage": "Power & Voltage",
+            "severity": "critical",
+            "message": f"Hardware throttle flags active: {', '.join(th_flags)}",
+            "recommendation": "Use official Raspberry Pi 27W USB-C power supply."
+        })
+        status = "critical"
+
+    return {
+        "overall_status": status,
+        "rtf": rtf,
+        "bottlenecks": bottlenecks
+    }
 
 
 class ShmReader:
@@ -242,6 +361,54 @@ def index():
     return send_from_directory(WEB_DIR, "index.html")
 
 
+@app.route("/pipeline")
+def pipeline():
+    return send_from_directory(WEB_DIR, "pipeline.html")
+
+
+@app.route("/api/pipeline")
+def api_pipeline():
+    st = reader.read_stats()
+    sys_info = read_system_telemetry()
+    sim_running = is_simulator_running()
+
+    audio_cfg = cfg.get("audio", {})
+    src_info = {
+        "source_type": audio_cfg.get("source", "alsa"),
+        "device": audio_cfg.get("alsa_device", "hw:0,0"),
+        "rate": audio_cfg.get("rate", 16000),
+        "channels": audio_cfg.get("channels", 2),
+        "period_frames": audio_cfg.get("period_frames", 160),
+        "simulator_running": sim_running,
+    }
+
+    bneck_info = analyze_bottlenecks(st, sys_info, cfg)
+    recent_wf = reader.read_recent_waveform(100)
+
+    with _lock:
+        evts_copy = list(_queue)[-20:]
+
+    recent_evts = []
+    for chunk in evts_copy:
+        for ph in chunk.get("phonemes", []):
+            recent_evts.append({
+                "event_id": chunk.get("index", 0),
+                "phoneme": ph,
+                "confidence": 0.95,
+                "lag_ms": chunk.get("timing", {}).get("total", st.get("last_lag_ms", 0.0)),
+                "timestamp": chunk.get("timestamp", ""),
+            })
+
+    return jsonify({
+        "stats": st,
+        "system": sys_info,
+        "source": src_info,
+        "bottlenecks": bneck_info,
+        "waveform": recent_wf,
+        "recent_events": recent_evts[-20:],
+    })
+
+
 @app.route("/<path:filename>")
 def static_files(filename):
     return send_from_directory(WEB_DIR, filename)
@@ -307,11 +474,53 @@ def telemetry_broadcaster():
     """Background thread polling rings and emitting new chunks & updates."""
     global _chunk_counter
     interval = 1.0 / max(RATE_HZ, 1)
+    tick = 0
 
     while True:
         try:
+            tick += 1
             evts = reader.read_new_events()
             st = reader.read_stats()
+
+            # Broadcast pipeline update every 1 second (or when events occur)
+            if tick % max(RATE_HZ, 1) == 0 or evts:
+                try:
+                    sys_info = read_system_telemetry()
+                    sim_running = is_simulator_running()
+                    bneck_info = analyze_bottlenecks(st, sys_info, cfg)
+                    wf_preview = reader.read_recent_waveform(80)
+
+                    with _lock:
+                        recent_q = list(_queue)[-10:]
+
+                    revts = []
+                    for c in recent_q:
+                        for p in c.get("phonemes", []):
+                            revts.append({
+                                "event_id": c.get("index", 0),
+                                "phoneme": p,
+                                "confidence": 0.95,
+                                "lag_ms": c.get("timing", {}).get("total", 0.0),
+                                "timestamp": c.get("timestamp", ""),
+                            })
+
+                    pipeline_payload = {
+                        "stats": st,
+                        "system": sys_info,
+                        "source": {
+                            "source_type": cfg.get("audio", {}).get("source", "alsa"),
+                            "device": cfg.get("audio", {}).get("alsa_device", "hw:0,0"),
+                            "rate": cfg.get("audio", {}).get("rate", 16000),
+                            "channels": cfg.get("audio", {}).get("channels", 2),
+                            "simulator_running": sim_running,
+                        },
+                        "bottlenecks": bneck_info,
+                        "waveform": wf_preview,
+                        "recent_events": revts[-10:],
+                    }
+                    socketio.emit("pipeline_update", pipeline_payload)
+                except Exception:
+                    pass
 
             if evts:
                 wf = reader.read_recent_waveform(150)

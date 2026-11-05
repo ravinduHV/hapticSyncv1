@@ -10,6 +10,12 @@
 
 namespace hs {
 
+enum SampleFormat {
+    FORMAT_S16_LE = 0,
+    FORMAT_S32_LE = 1,
+    FORMAT_FLOAT_LE = 2
+};
+
 class AlsaSource {
 public:
     AlsaSource(const std::string& device, int rate, int channels,
@@ -39,19 +45,26 @@ public:
     int sample_bytes() const { return sample_bytes_; }
 
     /// True if samples are S32_LE (need /2^31 conversion), false if S16_LE (/2^15).
-    bool is_s32() const { return is_s32_; }
+    bool is_s32() const { return format_ == FORMAT_S32_LE; }
+
+    /// Return format enum
+    SampleFormat format() const { return format_; }
+
+    /// Active device name after open
+    const std::string& active_device() const { return active_device_; }
 
 private:
     bool handle_xrun(int err);
 
     std::string device_;
+    std::string active_device_;
     int rate_;
     int channels_;
     int period_frames_;
     int buffer_periods_;
     uint32_t xruns_ = 0;
     int sample_bytes_ = 2;
-    bool is_s32_ = false;
+    SampleFormat format_ = FORMAT_S16_LE;
 
 #ifdef __linux__
     snd_pcm_t* pcm_ = nullptr;
@@ -60,4 +73,5 @@ private:
 };
 
 } // namespace hs
+
 

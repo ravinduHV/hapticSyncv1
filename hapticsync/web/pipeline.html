@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>BinaryBrains – Pipeline Health & Diagnostics</title>
+<meta name="description" content="Real-time pipeline diagnostics, bottleneck identification and stage health for HapticSync on Raspberry Pi 5"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+/* ── Reset & Variables ─────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#05080f;
+  --bg1:#0b1121;
+  --bg2:#111827;
+  --bg3:rgba(255,255,255,.04);
+  --border:rgba(255,255,255,.07);
+  --border-hi:rgba(255,255,255,.16);
+  --cyan:#00d4ff;
+  --cyan-dim:rgba(0,212,255,.12);
+  --purple:#a855f7;
+  --purple-dim:rgba(168,85,247,.12);
+  --amber:#f59e0b;
+  --amber-dim:rgba(245,158,11,.12);
+  --green:#10b981;
+  --green-dim:rgba(16,185,129,.12);
+  --blue:#3b82f6;
+  --red:#ef4444;
+  --red-dim:rgba(239,68,68,.12);
+  --text0:#e8f3fb;
+  --text1:#8faec8;
+  --text2:#476582;
+  --r:10px;
+  --r-sm:6px;
+  --shadow:0 4px 24px rgba(0,0,0,.5);
+}
+html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'Inter',sans-serif;font-size:13px;line-height:1.5}
+::selection{background:var(--cyan-dim);color:var(--cyan)}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:99px}
+
+/* ── Top Navbar ────────────────────────────────────────────────────────── */
+.navbar{display:flex;align-items:center;gap:14px;padding:0 20px;height:56px;
+  background:rgba(11,17,33,.95);border-bottom:1px solid var(--border);
+  backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;white-space:nowrap}
+.logo-icon{width:28px;height:28px;border-radius:7px;
+  background:linear-gradient(135deg,var(--cyan),var(--purple));
+  display:flex;align-items:center;justify-content:center;font-size:14px}
+.badge{padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.badge-cyan{background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(0,212,255,.3)}
+.badge-green{background:var(--green-dim);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.badge-amber{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.badge-red{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.nav-pill{display:flex;align-items:center;gap:7px;background:var(--bg3);
+  border:1px solid var(--border);border-radius:20px;padding:4px 12px;
+  font-size:11px;color:var(--text1)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text2);transition:background .3s}
+.dot.live{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.spacer{flex:1}
+.btn{background:var(--bg3);border:1px solid var(--border);color:var(--text0);
+  border-radius:var(--r-sm);padding:6px 14px;cursor:pointer;font-size:12px;
+  font-family:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:all .2s}
+.btn:hover{background:var(--border-hi);border-color:var(--border-hi)}
+.btn.primary{background:linear-gradient(135deg,var(--cyan-dim),var(--purple-dim));
+  border-color:var(--cyan);color:var(--cyan)}
+.btn.primary:hover{background:linear-gradient(135deg,rgba(0,212,255,.25),rgba(168,85,247,.25))}
+
+/* ── App Container ─────────────────────────────────────────────────────── */
+.container{max-width:1440px;margin:0 auto;padding:16px 20px 40px;display:flex;flex-direction:column;gap:18px}
+
+/* ── Diagnostic Alert Banner ───────────────────────────────────────────── */
+.alert-banner{padding:12px 18px;border-radius:var(--r);border:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:12px;transition:all .3s}
+.alert-banner.healthy{background:rgba(16,185,129,.07);border-color:rgba(16,185,129,.25)}
+.alert-banner.warning{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.35)}
+.alert-banner.critical{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.35)}
+.alert-icon{font-size:20px;line-height:1}
+.alert-body{flex:1}
+.alert-title{font-size:13px;font-weight:600;margin-bottom:3px}
+.alert-desc{font-size:12px;color:var(--text1)}
+.alert-meta{display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text2)}
+.alert-meta span b{color:var(--text1);font-family:'JetBrains Mono',monospace}
+
+/* ── Pipeline Topology Diagram ─────────────────────────────────────────── */
+.pipeline-card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r);padding:18px}
+.section-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);display:flex;align-items:center;gap:6px}
+.flow-diagram{display:flex;align-items:stretch;gap:8px;overflow-x:auto;padding-bottom:6px}
+.stage-node{flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r-sm);padding:10px 12px;display:flex;flex-direction:column;gap:5px;
+  position:relative;transition:all .25s ease}
+.stage-node:hover{border-color:var(--border-hi);box-shadow:var(--shadow)}
+.stage-node.active-busy{border-color:var(--cyan);box-shadow:0 0 12px rgba(0,212,255,.2);animation:glowCyan 2s infinite}
+@keyframes glowCyan{0%,100%{box-shadow:0 0 10px rgba(0,212,255,.25)}50%{box-shadow:0 0 20px rgba(0,212,255,.45)}}
+.stage-hdr{display:flex;align-items:center;justify-content:space-between}
+.stage-name{font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px}
+.stage-core{font-size:9px;font-family:'JetBrains Mono',monospace;color:var(--text2);background:var(--bg3);border-radius:3px;padding:1px 5px}
+.stage-val{font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--text0);margin-top:4px}
+.stage-sub{font-size:10px;color:var(--text2)}
+.stage-arrow{display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:16px;opacity:.5}
+
+/* ── KPI Grid ──────────────────────────────────────────────────────────── */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.kpi-box{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:6px}
+.kpi-hdr{display:flex;justify-content:space-between;align-items:center}
+.kpi-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.kpi-main{font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--cyan);line-height:1.1}
+.kpi-footer{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--text2);margin-top:4px}
+.kpi-footer span b{font-family:'JetBrains Mono',monospace;color:var(--text1)}
+
+/* ── Main Two Column Layout ────────────────────────────────────────────── */
+.main-grid{display:grid;grid-template-columns:1.8fr 1.2fr;gap:18px}
+.col{display:flex;flex-direction:column;gap:18px}
+.panel{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+
+/* Canvas Charts */
+.chart-wrap{position:relative;width:100%;height:140px;background:rgba(0,0,0,.25);border-radius:var(--r-sm);overflow:hidden;margin-top:10px}
+.chart-canvas{width:100%;height:100%;display:block}
+.chart-legend{display:flex;gap:14px;font-size:10px;color:var(--text2);margin-top:8px}
+.chart-legend span{display:flex;align-items:center;gap:5px}
+.chart-legend i{width:9px;height:3px;border-radius:2px;display:inline-block}
+
+/* Live Event Table */
+.event-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px}
+.event-table th{text-align:left;color:var(--text2);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--border);text-transform:uppercase;font-size:10px}
+.event-table td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.03);font-family:'JetBrains Mono',monospace}
+.event-table tr:hover{background:var(--bg3)}
+.ph-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-weight:600;background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(0,212,255,.3)}
+.conf-bar{width:60px;height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.conf-fill{height:100%;background:var(--green);border-radius:2px}
+
+/* System Details & Thermals */
+.gauge-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.gauge-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:12px;display:flex;flex-direction:column;gap:4px}
+.gauge-val{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.gauge-lbl{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em}
+
+/* CPU Core Map */
+.core-map{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.core-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:8px 10px;display:flex;flex-direction:column;gap:3px}
+.core-num{font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--cyan)}
+.core-role{font-size:9px;color:var(--text2);text-transform:uppercase}
+.core-status{font-size:10px;color:var(--text1)}
+
+/* Audio Waveform Mini Display */
+.audio-meter-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;margin-top:10px}
+.audio-meter-canvas{width:100%;height:46px;display:block;border-radius:4px;background:rgba(0,0,0,.35)}
+
+/* Responsive */
+@media(max-width:1080px){
+  .kpi-grid{grid-template-columns:1fr 1fr}
+  .main-grid{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  .kpi-grid{grid-template-columns:1fr}
+  .flow-diagram{flex-direction:column}
+  .stage-arrow{transform:rotate(90deg);margin:4px 0}
+}
+</style>
+</head>
+<body>
+
+<!-- ── Navbar ──────────────────────────────────────────────────────────── -->
+<header class="navbar">
+  <div class="logo">
+    <div class="logo-icon">🧠</div>
+    BinaryBrains
+  </div>
+  <span class="badge badge-cyan">Pipeline Monitor</span>
+  <div class="nav-pill">
+    <div class="dot" id="net-dot"></div>
+    <span id="net-label">Connecting…</span>
+  </div>
+  <div class="nav-pill" title="Time since pipeline started">
+    ⏱️ Uptime: <b id="nav-uptime" style="margin-left:4px;color:var(--text0);font-family:'JetBrains Mono',monospace">00:00:00</b>
+  </div>
+  <div class="spacer"></div>
+  <a href="/" class="btn" title="Back to rolling phoneme audio viewer">🎙️ Phoneme Monitor</a>
+  <button class="btn primary" id="refresh-btn" onclick="togglePause()">⏸ Pause Feed</button>
+</header>
+
+<main class="container">
+
+  <!-- ── Diagnostic Alert Banner ─────────────────────────────────────────── -->
+  <section class="alert-banner healthy" id="diag-banner">
+    <div class="alert-icon" id="diag-icon">🟢</div>
+    <div class="alert-body">
+      <div class="alert-title" id="diag-title">Analyzing Real-Time Pipeline State…</div>
+      <div class="alert-desc" id="diag-desc">Connecting to shared memory telemetry ring on CPU 0.</div>
+      <div class="alert-meta" id="diag-meta">
+        <span>RT Factor: <b id="dm-rtf">—</b></span>
+        <span>Drop Policy: <b id="dm-policy">LATEST</b></span>
+        <span>Model Worker: <b id="dm-busy">IDLE</b></span>
+        <span>Audio Status: <b id="dm-audio">OK</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Pipeline Topology Diagram ───────────────────────────────────────── -->
+  <section class="pipeline-card">
+    <div class="section-hdr">
+      <span class="section-title">⚡ End-to-End Pipeline Stages (RPi 5 Core Topology)</span>
+      <span style="font-size:11px;color:var(--text2)">Lock-Free POSIX SHM + AF_UNIX SOCK_SEQPACKET</span>
+    </div>
+    <div class="flow-diagram">
+
+      <!-- Stage 1 -->
+      <div class="stage-node" id="sn-source">
+        <div class="stage-hdr">
+          <span class="stage-name">🎙️ Audio In</span>
+          <span class="stage-core" id="sn-source-type">I2S / ALSA</span>
+        </div>
+        <div class="stage-val" id="sn-source-rate">16.0 kHz</div>
+        <div class="stage-sub" id="sn-source-dev">hw:Loopback,1</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 2 -->
+      <div class="stage-node" id="sn-producer">
+        <div class="stage-hdr">
+          <span class="stage-name">⚙️ Producer</span>
+          <span class="stage-core">CPU 1 (RT)</span>
+        </div>
+        <div class="stage-val" id="sn-prod-rate">0 p/s</div>
+        <div class="stage-sub" id="sn-prod-sub">SCHED_FIFO</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 3 -->
+      <div class="stage-node" id="sn-audio-ring">
+        <div class="stage-hdr">
+          <span class="stage-name">🔄 Audio Ring</span>
+          <span class="stage-core">SHM 60s</span>
+        </div>
+        <div class="stage-val" id="sn-ring-cap">1.05M samp</div>
+        <div class="stage-sub" id="sn-ring-sub">Lock-Free SPSC</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 4 -->
+      <div class="stage-node" id="sn-assembler">
+        <div class="stage-hdr">
+          <span class="stage-name">🪟 Assembler</span>
+          <span class="stage-core">CPU 1</span>
+        </div>
+        <div class="stage-val" id="sn-assem-val">0 sent</div>
+        <div class="stage-sub" id="sn-assem-sub">Window Tiler</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 5 -->
+      <div class="stage-node" id="sn-infer">
+        <div class="stage-hdr">
+          <span class="stage-name">🧠 Inference</span>
+          <span class="stage-core">CPU 2</span>
+        </div>
+        <div class="stage-val" id="sn-infer-val">— ms</div>
+        <div class="stage-sub" id="sn-infer-sub">Wav2Vec2 CTC</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 6 -->
+      <div class="stage-node" id="sn-post">
+        <div class="stage-hdr">
+          <span class="stage-name">🔤 PostProc</span>
+          <span class="stage-core">CPU 3</span>
+        </div>
+        <div class="stage-val" id="sn-post-val">0 evts</div>
+        <div class="stage-sub" id="sn-post-sub">CTC Collapse</div>
+      </div>
+      <div class="stage-arrow">→</div>
+
+      <!-- Stage 7 -->
+      <div class="stage-node" id="sn-telem">
+        <div class="stage-hdr">
+          <span class="stage-name">📊 Telemetry</span>
+          <span class="stage-core">CPU 0</span>
+        </div>
+        <div class="stage-val" id="sn-telem-val">Active</div>
+        <div class="stage-sub" id="sn-telem-sub">Port 5000</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── KPI Metrics Grid ────────────────────────────────────────────────── -->
+  <section class="kpi-grid">
+
+    <!-- Card 1 -->
+    <div class="kpi-box">
+      <div class="kpi-hdr">
+        <span class="kpi-title">Audio Capture Health</span>
+        <span class="badge badge-green" id="kpi-audio-badge">NOMINAL</span>
+      </div>
+      <div class="kpi-main" id="kpi-periods">0</div>
+      <div class="kpi-footer">
+        <span>XRUNs: <b id="kpi-xruns" style="color:var(--text1)">0</b></span>
+        <span>Sample Gaps: <b id="kpi-gaps" style="color:var(--text1)">0</b></span>
+      </div>
+    </div>
+
+    <!-- Card 2 -->
+    <div class="kpi-box">
+      <div class="kpi-hdr">
+        <span class="kpi-title">Inference Speed & RTF</span>
+        <span class="badge badge-cyan" id="kpi-rtf-badge">RTF 1.40</span>
+      </div>
+      <div class="kpi-main" id="kpi-infer-ms">—<span style="font-size:16px;font-weight:400"> ms</span></div>
+      <div class="kpi-footer">
+        <span>Sent: <b id="kpi-wins-sent">0</b></span>
+        <span>Done: <b id="kpi-wins-done">0</b></span>
+        <span>Drop: <b id="kpi-wins-drop" style="color:var(--amber)">0</b></span>
+      </div>
+    </div>
+
+    <!-- Card 3 -->
+    <div class="kpi-box">
+      <div class="kpi-hdr">
+        <span class="kpi-title">End-to-End Latency</span>
+        <span class="badge badge-purple" id="kpi-lag-badge">LAG</span>
+      </div>
+      <div class="kpi-main" id="kpi-lag-ms" style="color:var(--purple)">—<span style="font-size:16px;font-weight:400"> ms</span></div>
+      <div class="kpi-footer">
+        <span>Min: <b id="kpi-lag-min">—</b></span>
+        <span>Avg: <b id="kpi-lag-avg">—</b></span>
+        <span>Max: <b id="kpi-lag-max">—</b></span>
+      </div>
+    </div>
+
+    <!-- Card 4 -->
+    <div class="kpi-box">
+      <div class="kpi-hdr">
+        <span class="kpi-title">Phoneme Events Emitted</span>
+        <span class="badge badge-green" id="kpi-evt-badge">LIVE</span>
+      </div>
+      <div class="kpi-main" id="kpi-events" style="color:var(--green)">0</div>
+      <div class="kpi-footer">
+        <span>Ring Laps: <b id="kpi-lapped">0</b></span>
+        <span>Rate: <b id="kpi-evt-rate">0 /s</b></span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Main Grid ───────────────────────────────────────────────────────── -->
+  <section class="main-grid">
+
+    <!-- Left Column (Graphs & Stream) -->
+    <div class="col">
+
+      <!-- Window Flow Timeline -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">📈 Real-Time Window Throughput & Drops (Last 60s)</span>
+          <span style="font-size:11px;color:var(--text2)">1 Hz Sampling</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="flow-canvas" class="chart-canvas" height="140"></canvas>
+        </div>
+        <div class="chart-legend">
+          <span><i style="background:var(--cyan)"></i> Windows Sent</span>
+          <span><i style="background:var(--green)"></i> Windows Completed</span>
+          <span><i style="background:var(--red)"></i> Windows Dropped (Latest Policy Catchup)</span>
+        </div>
+      </div>
+
+      <!-- Latency Timeline -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">⏱️ Model Inference Time & Pipeline Lag Trend</span>
+          <span style="font-size:11px;color:var(--text2)">Milliseconds (ms)</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="lag-canvas" class="chart-canvas" height="140"></canvas>
+        </div>
+        <div class="chart-legend">
+          <span><i style="background:var(--purple)"></i> End-to-End Pipeline Lag</span>
+          <span><i style="background:var(--cyan)"></i> Model Forward Pass Time</span>
+        </div>
+      </div>
+
+      <!-- Recent Phoneme Events Table -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">🔤 Recent Phoneme Detections (Event Ring Stream)</span>
+          <span style="font-size:11px;color:var(--text2)">SHM Slot Cursor</span>
+        </div>
+        <table class="event-table">
+          <thead>
+            <tr>
+              <th style="width:70px">ID</th>
+              <th style="width:90px">Phoneme</th>
+              <th>Confidence</th>
+              <th>Lag</th>
+              <th>Timestamp</th>
+            </tr>
+          </thead>
+          <tbody id="event-table-body">
+            <tr><td colspan="5" style="text-align:center;color:var(--text2);padding:24px">Waiting for phoneme events…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- Right Column (Hardware, Thermals, Source) -->
+    <div class="col">
+
+      <!-- System Thermals & Hardware -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">🌡️ Raspberry Pi 5 Hardware Telemetry</span>
+          <span class="badge badge-green" id="hw-status-badge">COOL</span>
+        </div>
+        <div class="gauge-grid">
+          <div class="gauge-box">
+            <span class="gauge-lbl">SoC Temperature</span>
+            <span class="gauge-val" id="hw-temp" style="color:var(--green)">— °C</span>
+          </div>
+          <div class="gauge-box">
+            <span class="gauge-lbl">Arm Clock Freq</span>
+            <span class="gauge-val" id="hw-freq" style="color:var(--cyan)">2400 MHz</span>
+          </div>
+        </div>
+        <div style="margin-top:10px;padding:10px;background:var(--bg2);border-radius:var(--r-sm);border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text2);text-transform:uppercase;margin-bottom:4px">Throttle Status (vcgencmd)</div>
+          <div id="hw-throttled" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text1)">0x0 (Nominal)</div>
+        </div>
+      </div>
+
+      <!-- CPU Core Pinning Map -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">🧩 CPU Core Affinities & Worker Distribution</span>
+          <span style="font-size:11px;color:var(--text2)">Taskset Pinning</span>
+        </div>
+        <div class="core-map">
+          <div class="core-card">
+            <span class="core-num">CPU 0</span>
+            <span class="core-role">Housekeep</span>
+            <span class="core-status">Telemetry / OS</span>
+          </div>
+          <div class="core-card">
+            <span class="core-num">CPU 1</span>
+            <span class="core-role">Capture/RT</span>
+            <span class="core-status">Producer / Assem</span>
+          </div>
+          <div class="core-card">
+            <span class="core-num">CPU 2</span>
+            <span class="core-role">Model</span>
+            <span class="core-status">PyTorch CTC</span>
+          </div>
+          <div class="core-card">
+            <span class="core-num">CPU 3</span>
+            <span class="core-role">Post-Proc</span>
+            <span class="core-status">CTC Merge Ring</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Audio Source & Simulator Monitor -->
+      <div class="panel">
+        <div class="section-hdr">
+          <span class="section-title">🎙️ Audio Source & I2S Simulator Status</span>
+          <span class="badge badge-cyan" id="src-badge">ALSA LOOPBACK</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:11px;margin-top:6px">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">Source Mode:</span><b id="src-mode" style="color:var(--text0)">loopback</b></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">ALSA Device:</span><b id="src-device" style="color:var(--text0);font-family:'JetBrains Mono',monospace">hw:Loopback,1,0</b></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">Format & Rate:</span><b id="src-format" style="color:var(--text0)">16 kHz Stereo 32-bit</b></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">I2S Simulator Process:</span><b id="src-sim-proc" style="color:var(--green)">Active</b></div>
+        </div>
+        <div class="audio-meter-box">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text2);margin-bottom:4px">
+            <span>Live Audio Input Oscilloscope</span>
+            <span id="src-rms-lbl">RMS: 0.000</span>
+          </div>
+          <canvas id="meter-canvas" class="audio-meter-canvas" height="46"></canvas>
+        </div>
+      </div>
+
+      <!-- Bottleneck Analysis & Recommendations -->
+      <div class="panel" style="border-color:rgba(0,212,255,.2)">
+        <div class="section-hdr">
+          <span class="section-title">🔍 Pipeline Bottleneck Analyzer</span>
+          <span class="badge badge-purple">Automated</span>
+        </div>
+        <div id="bottleneck-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <div style="font-size:11px;color:var(--text1)">Evaluating pipeline stages against empirical cost curve (a=0.40s, b=1.40)…</div>
+        </div>
+      </div>
+
+    </div>
+
+  </section>
+
+</main>
+
+<script>
+// ── State & Buffers ───────────────────────────────────────────────────────
+let paused = false;
+const HISTORY_LEN = 60;
+let historyFlow = { sent: [], done: [], drop: [] };
+let historyLag = { lag: [], infer: [] };
+let lastStats = null;
+let lastEvents = [];
+let startTime = null;
+
+// ── Chart Draw Helpers ────────────────────────────────────────────────────
+function drawLineChart(canvas, datasets, colors, maxVal) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 400;
+  const H = canvas.height;
+  canvas.width = W;
+  ctx.clearRect(0, 0, W, H);
+
+  // Background grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, H * 0.25); ctx.lineTo(W, H * 0.25);
+  ctx.moveTo(0, H * 0.50); ctx.lineTo(W, H * 0.50);
+  ctx.moveTo(0, H * 0.75); ctx.lineTo(W, H * 0.75);
+  ctx.stroke();
+
+  if (!datasets || datasets.length === 0 || datasets[0].length < 2) return;
+
+  const N = datasets[0].length;
+  datasets.forEach((data, dIdx) => {
+    ctx.strokeStyle = colors[dIdx];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    data.forEach((val, i) => {
+      const x = (i / (HISTORY_LEN - 1)) * W;
+      const y = H - Math.min(Math.max((val / (maxVal || 1)), 0), 1) * (H * 0.85) - 6;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+}
+
+function drawWaveform(canvas, samples) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 300;
+  const H = canvas.height;
+  canvas.width = W;
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.strokeStyle = 'rgba(0,212,255,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const N = samples.length;
+  if (N === 0) {
+    ctx.moveTo(0, H / 2);
+    ctx.lineTo(W, H / 2);
+  } else {
+    samples.forEach((s, i) => {
+      const x = (i / (N - 1)) * W;
+      const y = (H / 2) - (s * (H / 2) * 0.9);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+  }
+  ctx.stroke();
+}
+
+// ── Format helpers ────────────────────────────────────────────────────────
+function fmtUptime(sec) {
+  const s = Math.floor(sec % 60);
+  const m = Math.floor((sec / 60) % 60);
+  const h = Math.floor(sec / 3600);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+// ── UI Updates ────────────────────────────────────────────────────────────
+function updateDashboard(data) {
+  if (paused || !data) return;
+
+  const st = data.stats || {};
+  const sys = data.system || {};
+  const src = data.source || {};
+  const bneck = data.bottlenecks || {};
+  lastStats = st;
+
+  // 1. Diagnostic Banner
+  const banner = document.getElementById('diag-banner');
+  const dIcon = document.getElementById('diag-icon');
+  const dTitle = document.getElementById('diag-title');
+  const dDesc = document.getElementById('diag-desc');
+  const bStatus = bneck.overall_status || 'healthy';
+
+  banner.className = `alert-banner ${bStatus}`;
+  if (bStatus === 'healthy') {
+    dIcon.textContent = '🟢';
+    dTitle.textContent = 'Pipeline Running Nominally';
+    dDesc.textContent = 'All stages producing and consuming at target rates with zero critical faults.';
+  } else if (bStatus === 'warning') {
+    dIcon.textContent = '🟡';
+    dTitle.textContent = 'Performance Warning — Throughput or Model Load';
+    const firstMsg = bneck.bottlenecks && bneck.bottlenecks[0] ? bneck.bottlenecks[0].message : 'Load elevated.';
+    dDesc.textContent = firstMsg;
+  } else {
+    dIcon.textContent = '🔴';
+    dTitle.textContent = 'Critical Pipeline Bottleneck Detected';
+    const firstMsg = bneck.bottlenecks && bneck.bottlenecks[0] ? bneck.bottlenecks[0].message : 'Check hardware or worker processes.';
+    dDesc.textContent = firstMsg;
+  }
+
+  const rtf = bneck.rtf || (st.last_infer_ms ? (st.last_infer_ms / 1000).toFixed(2) : 1.40);
+  document.getElementById('dm-rtf').textContent = `${rtf}x`;
+  document.getElementById('dm-policy').textContent = st.windows_dropped > 0 ? 'LATEST (active drops)' : 'LATEST';
+  document.getElementById('dm-busy').textContent = st.model_busy ? 'PROCESSING' : 'IDLE';
+  document.getElementById('dm-audio').textContent = (st.xruns > 0) ? `${st.xruns} XRUNs` : 'HEALTHY';
+
+  // Uptime
+  if (st.start_ns) {
+    if (!startTime) startTime = Date.now();
+    const upSec = (Date.now() - startTime) / 1000;
+    document.getElementById('nav-uptime').textContent = fmtUptime(upSec);
+  }
+
+  // 2. Topology Nodes
+  const inferNode = document.getElementById('sn-infer');
+  if (st.model_busy) {
+    inferNode.classList.add('active-busy');
+  } else {
+    inferNode.classList.remove('active-busy');
+  }
+  document.getElementById('sn-source-type').textContent = src.source_type ? src.source_type.toUpperCase() : 'ALSA';
+  document.getElementById('sn-source-dev').textContent = src.device || 'hw:Loopback,1';
+  document.getElementById('sn-source-rate').textContent = `${(src.rate || 16000) / 1000} kHz`;
+
+  document.getElementById('sn-prod-rate').textContent = `${st.periods_captured || 0} p`;
+  document.getElementById('sn-assem-val').textContent = `${st.windows_sent || 0} sent`;
+  document.getElementById('sn-infer-val').textContent = st.last_infer_ms ? `${st.last_infer_ms.toFixed(0)} ms` : '— ms';
+  document.getElementById('sn-post-val').textContent = `${st.events_emitted || 0} evts`;
+
+  // 3. KPI Cards
+  document.getElementById('kpi-periods').textContent = (st.periods_captured || 0).toLocaleString();
+  document.getElementById('kpi-xruns').textContent = st.xruns || 0;
+  document.getElementById('kpi-gaps').textContent = st.gaps || 0;
+
+  if (st.last_infer_ms) {
+    document.getElementById('kpi-infer-ms').innerHTML = `${st.last_infer_ms.toFixed(0)}<span style="font-size:16px;font-weight:400"> ms</span>`;
+  }
+  document.getElementById('kpi-wins-sent').textContent = st.windows_sent || 0;
+  document.getElementById('kpi-wins-done').textContent = st.windows_done || 0;
+  document.getElementById('kpi-wins-drop').textContent = st.windows_dropped || 0;
+
+  if (st.last_lag_ms) {
+    document.getElementById('kpi-lag-ms').innerHTML = `${st.last_lag_ms.toFixed(0)}<span style="font-size:16px;font-weight:400"> ms</span>`;
+  }
+  document.getElementById('kpi-lag-min').textContent = st.min_lag_ms ? `${st.min_lag_ms.toFixed(0)}ms` : '—';
+  document.getElementById('kpi-lag-avg').textContent = st.avg_lag_ms ? `${st.avg_lag_ms.toFixed(0)}ms` : '—';
+  document.getElementById('kpi-lag-max').textContent = st.max_lag_ms ? `${st.max_lag_ms.toFixed(0)}ms` : '—';
+
+  document.getElementById('kpi-events').textContent = (st.events_emitted || 0).toLocaleString();
+  document.getElementById('kpi-lapped').textContent = st.events_lapped || 0;
+
+  // 4. Hardware thermals
+  if (sys.temp_c) {
+    const tempEl = document.getElementById('hw-temp');
+    tempEl.textContent = `${sys.temp_c.toFixed(1)} °C`;
+    if (sys.temp_c > 75) tempEl.style.color = 'var(--red)';
+    else if (sys.temp_c > 60) tempEl.style.color = 'var(--amber)';
+    else tempEl.style.color = 'var(--green)';
+  }
+  if (sys.throttled) {
+    const thStr = sys.throttled_flags && sys.throttled_flags.length > 0 ?
+      `${sys.throttled}: ${sys.throttled_flags.join(', ')}` : `${sys.throttled} (Nominal)`;
+    document.getElementById('hw-throttled').textContent = thStr;
+  }
+  if (src.source_type) {
+    document.getElementById('src-mode').textContent = src.source_type;
+    document.getElementById('src-device').textContent = src.device || 'hw:Loopback,1';
+    document.getElementById('src-sim-proc').textContent = src.simulator_running ? 'Active (Running)' : 'Not detected';
+    document.getElementById('src-sim-proc').style.color = src.simulator_running ? 'var(--green)' : 'var(--amber)';
+  }
+
+  // 5. Update Rolling History for Charts
+  historyFlow.sent.push(st.windows_sent || 0);
+  historyFlow.done.push(st.windows_done || 0);
+  historyFlow.drop.push(st.windows_dropped || 0);
+  if (historyFlow.sent.length > HISTORY_LEN) {
+    historyFlow.sent.shift(); historyFlow.done.shift(); historyFlow.drop.shift();
+  }
+
+  historyLag.lag.push(st.last_lag_ms || 0);
+  historyLag.infer.push(st.last_infer_ms || 0);
+  if (historyLag.lag.length > HISTORY_LEN) {
+    historyLag.lag.shift(); historyLag.infer.shift();
+  }
+
+  // Draw Charts
+  const maxFlow = Math.max(...historyFlow.sent, ...historyFlow.done, ...historyFlow.drop, 10);
+  drawLineChart(document.getElementById('flow-canvas'),
+    [historyFlow.sent, historyFlow.done, historyFlow.drop],
+    ['#00d4ff', '#10b981', '#ef4444'], maxFlow);
+
+  const maxLag = Math.max(...historyLag.lag, ...historyLag.infer, 100);
+  drawLineChart(document.getElementById('lag-canvas'),
+    [historyLag.lag, historyLag.infer],
+    ['#a855f7', '#00d4ff'], maxLag);
+
+  // 6. Draw Audio Meter
+  if (data.waveform && data.waveform.length > 0) {
+    drawWaveform(document.getElementById('meter-canvas'), data.waveform);
+    const rms = Math.sqrt(data.waveform.reduce((acc, v) => acc + v*v, 0) / data.waveform.length);
+    document.getElementById('src-rms-lbl').textContent = `RMS: ${rms.toFixed(3)}`;
+  }
+
+  // 7. Bottlenecks List
+  const bList = document.getElementById('bottleneck-list');
+  bList.innerHTML = '';
+  if (bneck.bottlenecks && bneck.bottlenecks.length > 0) {
+    bneck.bottlenecks.forEach(b => {
+      const bColor = b.severity === 'critical' ? 'var(--red)' : 'var(--amber)';
+      const item = document.createElement('div');
+      item.style.cssText = `padding:8px 10px;background:var(--bg2);border-left:3px solid ${bColor};border-radius:4px;font-size:11px`;
+      item.innerHTML = `
+        <div style="font-weight:600;color:${bColor};display:flex;justify-content:space-between">
+          <span>${b.stage}</span>
+          <span style="font-size:9px;text-transform:uppercase">${b.severity}</span>
+        </div>
+        <div style="color:var(--text1);margin-top:2px">${b.message}</div>
+        <div style="color:var(--text2);margin-top:2px;font-size:10px">💡 Recommendation: ${b.recommendation}</div>
+      `;
+      bList.appendChild(item);
+    });
+  } else {
+    bList.innerHTML = '<div style="color:var(--green);font-size:11px">✅ No bottlenecks detected. Pipeline running at full rate.</div>';
+  }
+
+  // 8. Event Table
+  if (data.recent_events && data.recent_events.length > 0) {
+    const tbody = document.getElementById('event-table-body');
+    tbody.innerHTML = '';
+    data.recent_events.slice(-10).reverse().forEach(e => {
+      const tr = document.createElement('tr');
+      const confPct = Math.round((e.confidence || 0) * 100);
+      tr.innerHTML = `
+        <td style="color:var(--text2)">#${e.event_id || '—'}</td>
+        <td><span class="ph-badge">${e.phoneme}</span></td>
+        <td>
+          <div class="conf-bar"><div class="conf-fill" style="width:${confPct}%"></div></div>
+          <span>${(e.confidence || 0).toFixed(2)}</span>
+        </td>
+        <td style="color:var(--cyan)">${e.lag_ms ? e.lag_ms.toFixed(1) + ' ms' : '—'}</td>
+        <td style="color:var(--text2)">${e.timestamp ? e.timestamp.split('T')[1].slice(0,8) : '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+}
+
+// ── Polling & Socket.IO ───────────────────────────────────────────────────
+async function fetchPipeline() {
+  try {
+    const res = await fetch('/api/pipeline');
+    if (res.ok) {
+      const data = await res.json();
+      updateDashboard(data);
+    }
+  } catch (err) {
+    console.warn('Failed fetching /api/pipeline', err);
+  }
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('refresh-btn');
+  btn.textContent = paused ? '▶ Resume Feed' : '⏸ Pause Feed';
+  btn.classList.toggle('primary', !paused);
+}
+
+// Socket.IO
+const socket = io({ transports: ['websocket', 'polling'] });
+socket.on('connect', () => {
+  document.getElementById('net-dot').classList.add('live');
+  document.getElementById('net-label').textContent = 'Live Connected';
+  fetchPipeline();
+});
+socket.on('disconnect', () => {
+  document.getElementById('net-dot').classList.remove('live');
+  document.getElementById('net-label').textContent = 'Disconnected';
+});
+socket.on('pipeline_update', data => {
+  updateDashboard(data);
+});
+socket.on('new_chunk', chunk => {
+  // Trigger immediate stats refresh when new chunk arrives
+  fetchPipeline();
+});
+
+// Periodic fallback poll (every 1 second)
+setInterval(fetchPipeline, 1000);
+</script>
+</body>
+</html>
+
