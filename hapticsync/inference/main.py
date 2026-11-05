@@ -172,7 +172,7 @@ def main():
 
             # Forward pass
             t_begin_ns = time.monotonic_ns()
-            input_tensor = torch.from_numpy(samples).unsqueeze(0)
+            input_tensor = torch.from_numpy(np.copy(samples)).unsqueeze(0)
 
             with torch.inference_mode():
                 logits = model(input_tensor).logits
