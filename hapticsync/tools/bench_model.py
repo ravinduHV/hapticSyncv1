@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
 """
 bench_model.py — Benchmark Wav2Vec2 inference cost curve (Phase A Tasks A1–A5)
-Measures t(L) = a + b*L under pinned single-core configuration.
+Measures t(L) = a + b*L under configured pinned core(s).
 """
 
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-
 import sys
 import json
 import time
 import subprocess
-import numpy as np
 
-# Pin to CPU 2
+config_path = sys.argv[1] if len(sys.argv) > 1 else "config/hapticsync.json"
+try:
+    with open(config_path, "r") as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+model_cpus = cfg.get("cpus", {}).get("model", [2, 3])
+num_threads_str = str(max(len(model_cpus), 1))
+
+os.environ["OMP_NUM_THREADS"] = num_threads_str
+os.environ["MKL_NUM_THREADS"] = num_threads_str
+os.environ["OPENBLAS_NUM_THREADS"] = num_threads_str
+
+# Pin to configured model CPUs
 if hasattr(os, "sched_setaffinity"):
     try:
-        os.sched_setaffinity(0, {2})
-        print("[bench] Pinned to CPU 2")
+        os.sched_setaffinity(0, set(model_cpus))
+        print(f"[bench] Pinned to CPU(s) {model_cpus} (threads: {num_threads_str})")
     except Exception as e:
         print(f"[bench] Warning: Could not set CPU affinity: {e}")
 
+import numpy as np
 import torch
 from transformers import Wav2Vec2ForCTC
 
-torch.set_num_threads(1)
+torch.set_num_threads(len(model_cpus))
 torch.set_num_interop_threads(1)
 
 
@@ -73,6 +83,16 @@ def main():
     print(f"[bench] Loading model from {resolved_checkpoint}...")
     model = Wav2Vec2ForCTC.from_pretrained(resolved_checkpoint)
     model.eval()
+
+    if cfg.get("model", {}).get("quantize") == "int8":
+        print("[bench] Applying dynamic INT8 quantization for benchmark...")
+        try:
+            model = torch.ao.quantization.quantize_dynamic(
+                model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            print("[bench] INT8 quantization applied.")
+        except Exception as e:
+            print(f"[bench] Quantization failed: {e}")
 
     sample_rate = 16000
     test_durations_ms = [125, 250, 500, 1000, 2000, 4000]

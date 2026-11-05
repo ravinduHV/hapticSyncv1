@@ -1,5 +1,5 @@
 {
-  "cpus": { "housekeeping": [0], "producer": 1, "model": [2], "post": 3 },
+  "cpus": { "housekeeping": [0], "producer": 1, "model": [2, 3], "post": 1 },
   "rt": { "require_rt": false, "irq_thread_prio": 60, "producer_prio": 50 },
   "audio": {
     "source": "loopback",
@@ -25,7 +25,8 @@
   "model": {
     "checkpoint": "./model/",
     "blank_id": 41,
-    "vocab_json": "vocab.json"
+    "vocab_json": "vocab.json",
+    "quantize": "none"
   },
   "events": {
     "slot_count": 1024,

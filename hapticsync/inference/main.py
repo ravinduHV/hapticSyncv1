@@ -1,35 +1,37 @@
 #!/usr/bin/env python3
 """
 inference/main.py — Real-time model inference worker (Section 5.4)
-Pinned to CPU 2, single-threaded PyTorch, zero-copy shm input.
+Pinned to designated model CPUs (e.g. CPU 2, 3), zero-copy shm input.
 """
 
-# STRICT RT REQUIREMENT: Threading env vars MUST be set before importing numpy/torch
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-
 import sys
 import json
 import time
 import socket
-import numpy as np
 
-# Load config to get CPU pinning configuration
+# Load config FIRST so thread environment variables match model CPU allocation
 config_path = sys.argv[1] if len(sys.argv) > 1 else "config/hapticsync.json"
 with open(config_path, "r") as f:
     cfg = json.load(f)
 
+model_cpus = cfg.get("cpus", {}).get("model", [2, 3])
+num_threads_str = str(max(len(model_cpus), 1))
+
+# Set OpenMP and BLAS threading before importing numpy / torch
+os.environ["OMP_NUM_THREADS"] = num_threads_str
+os.environ["MKL_NUM_THREADS"] = num_threads_str
+os.environ["OPENBLAS_NUM_THREADS"] = num_threads_str
+
 # Set CPU affinity before importing heavy libraries
-model_cpus = cfg.get("cpus", {}).get("model", [2])
 if hasattr(os, "sched_setaffinity"):
     try:
         os.sched_setaffinity(0, set(model_cpus))
-        print(f"[inference] Pinned to CPU(s): {model_cpus}")
+        print(f"[inference] Pinned to CPU(s): {model_cpus} (Threads: {num_threads_str})")
     except Exception as e:
         print(f"[inference] Warning: Could not set CPU affinity: {e}", file=sys.stderr)
 
+import numpy as np
 import torch
 from transformers import Wav2Vec2ForCTC
 
@@ -127,6 +129,18 @@ def main():
     print(f"[inference] Loading Wav2Vec2 model from {resolved_checkpoint}...")
     model = Wav2Vec2ForCTC.from_pretrained(resolved_checkpoint)
     model.eval()
+
+    # Optional dynamic INT8 quantization for massive ARM CPU speedup
+    quant_mode = cfg.get("model", {}).get("quantize", "none")
+    if quant_mode == "int8":
+        print("[inference] Applying dynamic INT8 quantization (torch.ao.quantization.quantize_dynamic)...")
+        try:
+            model = torch.ao.quantization.quantize_dynamic(
+                model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            print("[inference] INT8 quantization active: Linear layers quantized for ARM NEON acceleration.")
+        except Exception as q_err:
+            print(f"[inference] Warning: Dynamic quantization failed ({q_err}), continuing in FP32.")
 
     run_startup_assertions(model, checkpoint, blank_id)
     warmup(model)

@@ -257,10 +257,10 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
       <div class="stage-node" id="sn-infer">
         <div class="stage-hdr">
           <span class="stage-name">🧠 Inference</span>
-          <span class="stage-core">CPU 2</span>
+          <span class="stage-core">CPU 2,3</span>
         </div>
         <div class="stage-val" id="sn-infer-val">— ms</div>
-        <div class="stage-sub" id="sn-infer-sub">Wav2Vec2 CTC</div>
+        <div class="stage-sub" id="sn-infer-sub">Wav2Vec2 2-Core</div>
       </div>
       <div class="stage-arrow">→</div>
 
@@ -268,7 +268,7 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
       <div class="stage-node" id="sn-post">
         <div class="stage-hdr">
           <span class="stage-name">🔤 PostProc</span>
-          <span class="stage-core">CPU 3</span>
+          <span class="stage-core">CPU 1</span>
         </div>
         <div class="stage-val" id="sn-post-val">0 evts</div>
         <div class="stage-sub" id="sn-post-sub">CTC Collapse</div>
@@ -447,18 +447,18 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
           </div>
           <div class="core-card">
             <span class="core-num">CPU 1</span>
-            <span class="core-role">Capture/RT</span>
-            <span class="core-status">Producer / Assem</span>
+            <span class="core-role">Pre & Post</span>
+            <span class="core-status">Capture / PostProc</span>
           </div>
           <div class="core-card">
             <span class="core-num">CPU 2</span>
-            <span class="core-role">Model</span>
-            <span class="core-status">PyTorch CTC</span>
+            <span class="core-role">Model A</span>
+            <span class="core-status">PyTorch Worker</span>
           </div>
           <div class="core-card">
             <span class="core-num">CPU 3</span>
-            <span class="core-role">Post-Proc</span>
-            <span class="core-status">CTC Merge Ring</span>
+            <span class="core-role">Model B</span>
+            <span class="core-status">PyTorch Worker</span>
           </div>
         </div>
       </div>
