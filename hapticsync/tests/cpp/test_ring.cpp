@@ -30,6 +30,7 @@ void test_ring_wraparound() {
     std::vector<float> out(400);
     bool ok = reader.read(100, out.data(), 400);
     assert(ok);
+    (void)ok;
     for (int i = 0; i < 400; ++i) {
         assert(out[i] == static_cast<float>(100 + i));
     }
@@ -45,6 +46,7 @@ void test_ring_wraparound() {
     std::vector<float> out_wrap(300);
     ok = reader.read(900, out_wrap.data(), 300);
     assert(ok);
+    (void)ok;
     for (int i = 0; i < 300; ++i) {
         assert(out_wrap[i] == static_cast<float>(900 + i));
     }
@@ -53,6 +55,7 @@ void test_ring_wraparound() {
     // 1400 - 100 = 1300 > 1024
     ok = reader.read(100, out.data(), 100);
     assert(!ok); // MUST fail because it was lapped
+    (void)ok;
 
     std::printf("[PASS] AudioRing wraparound and lapping test\n");
 }

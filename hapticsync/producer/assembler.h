@@ -10,6 +10,7 @@
 #include "../common/protocol.h"
 #include "../common/stats.h"
 #include "../common/config.h"
+#include "../common/rt_util.h"
 
 namespace hs {
 

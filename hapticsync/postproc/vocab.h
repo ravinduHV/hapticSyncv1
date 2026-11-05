@@ -1,6 +1,7 @@
 #pragma once
 // vocab.h — Token ID to phoneme string mapping (Section 5.5)
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <unordered_map>

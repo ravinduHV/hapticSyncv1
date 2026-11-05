@@ -7,6 +7,8 @@
 #include <vector>
 #include <atomic>
 #include <string>
+#include <thread>
+#include <chrono>
 
 #ifdef __linux__
 #include <sys/socket.h>

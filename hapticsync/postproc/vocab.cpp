@@ -28,13 +28,5 @@ bool Vocab::load(const std::string& path) {
     }
 }
 
-const char* Vocab::get(uint16_t id) const {
-    auto it = map_.find(id);
-    if (it != map_.end()) {
-        return it->second.c_str();
-    }
-    return UNK_STR;
-}
-
 } // namespace hs
 
