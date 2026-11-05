@@ -1,13 +1,60 @@
 {
-  "_comment": "Filled by Phase A bench_model.py — do not edit manually",
-  "a": null,
-  "b": null,
-  "rtf_curve": {},
-  "measured_at": null,
+  "a": 0.40177,
+  "b": 1.3993,
+  "policy_recommendation": "latest",
+  "rtf_curve": {
+    "125": {
+      "duration_s": 0.125,
+      "samples": 2000,
+      "mean_s": 0.6341,
+      "std_s": 0.0051,
+      "p95_s": 0.6362,
+      "rtf": 5.07
+    },
+    "250": {
+      "duration_s": 0.25,
+      "samples": 4000,
+      "mean_s": 0.8183,
+      "std_s": 0.0062,
+      "p95_s": 0.8237,
+      "rtf": 3.27
+    },
+    "500": {
+      "duration_s": 0.5,
+      "samples": 8000,
+      "mean_s": 1.1048,
+      "std_s": 0.0074,
+      "p95_s": 1.1082,
+      "rtf": 2.21
+    },
+    "1000": {
+      "duration_s": 1.0,
+      "samples": 16000,
+      "mean_s": 1.7155,
+      "std_s": 0.0089,
+      "p95_s": 1.7188,
+      "rtf": 1.72
+    },
+    "2000": {
+      "duration_s": 2.0,
+      "samples": 32000,
+      "mean_s": 3.0866,
+      "std_s": 0.0102,
+      "p95_s": 3.094,
+      "rtf": 1.54
+    },
+    "4000": {
+      "duration_s": 4.0,
+      "samples": 64000,
+      "mean_s": 6.0709,
+      "std_s": 0.0125,
+      "p95_s": 6.0761,
+      "rtf": 1.52
+    }
+  },
   "config": {
     "cpus_model": [2],
     "torch_threads": 1,
     "inference_mode": true
   }
 }
-
