@@ -59,7 +59,7 @@ SHM_STATS_PATH = "/dev/shm/hapticsync_stats"
 SHM_EVENTS_PATH = "/dev/shm/hapticsync_events"
 SHM_AUDIO_PATH = "/dev/shm/hapticsync_audio"
 
-STATS_FMT = "<QQIIQQQqIQQqqqQQq"
+STATS_FMT = "<QQIIQQQqI4xQQqqqQQq"
 STATS_SIZE = struct.calcsize(STATS_FMT)
 
 EVENT_FMT = "<QQqqQIHHf12s"
@@ -206,9 +206,10 @@ class ShmReader:
         try:
             if os.path.exists(SHM_STATS_PATH) and self.stats_mmap is None:
                 fd = os.open(SHM_STATS_PATH, os.O_RDONLY)
-                self.stats_mmap = mmap.mmap(fd, 256, mmap.MAP_SHARED, mmap.PROT_READ)
+                self.stats_mmap = mmap.mmap(fd, 0, mmap.MAP_SHARED, mmap.PROT_READ)
                 os.close(fd)
-        except Exception:
+        except Exception as e:
+            print(f"[mqtt_publisher] Warning: could not map stats SHM: {e}")
             self.stats_mmap = None
 
         try:
@@ -216,7 +217,7 @@ class ShmReader:
                 fd = os.open(SHM_EVENTS_PATH, os.O_RDONLY)
                 self.events_mmap = mmap.mmap(fd, 0, mmap.MAP_SHARED, mmap.PROT_READ)
                 os.close(fd)
-        except Exception:
+        except Exception as e:
             self.events_mmap = None
 
         try:
@@ -224,7 +225,7 @@ class ShmReader:
                 fd = os.open(SHM_AUDIO_PATH, os.O_RDONLY)
                 self.audio_mmap = mmap.mmap(fd, 0, mmap.MAP_SHARED, mmap.PROT_READ)
                 os.close(fd)
-        except Exception:
+        except Exception as e:
             self.audio_mmap = None
 
     def read_stats(self):
@@ -236,6 +237,8 @@ class ShmReader:
         try:
             self.stats_mmap.seek(0)
             data = self.stats_mmap.read(STATS_SIZE)
+            if len(data) < STATS_SIZE:
+                return {}
             fields = struct.unpack_from(STATS_FMT, data)
             return {
                 "periods_captured": fields[0],

@@ -252,10 +252,26 @@ def main():
             telem_label = f"local web dashboard (port {port})"
             telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
         elif use_mqtt:
-            telem_script = "telemetry/mqtt_publisher.py"
-            broker = args.mqtt_broker or cfg.get("telemetry", {}).get("mqtt_broker", "192.168.8.1")
-            telem_label = f"MQTT telemetry publisher (broker {broker})"
-            telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH, "--broker", broker]
+            # Check if paho-mqtt is available in the current python environment
+            has_paho = False
+            try:
+                import paho.mqtt.client
+                has_paho = True
+            except ImportError:
+                has_paho = False
+
+            if not has_paho:
+                print("[launcher] 'paho-mqtt' is not installed in this environment.")
+                print("[launcher] Falling back to zero-dependency TCP telemetry publisher (port 5555).")
+                print("[launcher] (To use MQTT: pip install paho-mqtt)")
+                telem_script = "telemetry/publisher.py"
+                telem_label = f"ultra-lightweight telemetry publisher (port 5555)"
+                telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
+            else:
+                telem_script = "telemetry/mqtt_publisher.py"
+                broker = args.mqtt_broker or cfg.get("telemetry", {}).get("mqtt_broker", "192.168.8.1")
+                telem_label = f"MQTT telemetry publisher (broker {broker})"
+                telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH, "--broker", broker]
         else:
             telem_script = "telemetry/publisher.py"
             telem_label = f"ultra-lightweight telemetry publisher (port {port})"
@@ -275,6 +291,7 @@ def main():
             code = p.poll()
             if code is not None:
                 print(f"[launcher] WARNING: Process {name} exited with code {code}!")
+                del procs[name]
                 if name == "producer":
                     print("[launcher] Producer died. Shutting down entire pipeline.")
                     cleanup()

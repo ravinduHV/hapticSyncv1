@@ -59,7 +59,7 @@ SHM_STATS_PATH = "/dev/shm/hapticsync_stats"
 SHM_EVENTS_PATH = "/dev/shm/hapticsync_events"
 SHM_AUDIO_PATH = "/dev/shm/hapticsync_audio"
 
-STATS_FMT = "<QQIIQQQqIQQqqqQQq"
+STATS_FMT = "<QQIIQQQqI4xQQqqqQQq"
 STATS_SIZE = struct.calcsize(STATS_FMT)
 
 EVENT_FMT = "<QQqqQIHHf12s"
@@ -238,9 +238,9 @@ class ShmReader:
         try:
             if os.path.exists(SHM_STATS_PATH) and self.stats_mmap is None:
                 fd = os.open(SHM_STATS_PATH, os.O_RDONLY)
-                self.stats_mmap = mmap.mmap(fd, 256, mmap.MAP_SHARED, mmap.PROT_READ)
+                self.stats_mmap = mmap.mmap(fd, 0, mmap.MAP_SHARED, mmap.PROT_READ)
                 os.close(fd)
-        except Exception:
+        except Exception as e:
             self.stats_mmap = None
 
         try:
