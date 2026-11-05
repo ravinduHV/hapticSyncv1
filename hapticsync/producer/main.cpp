@@ -151,13 +151,20 @@ int main(int argc, char* argv[]) {
     if (!lock_all()) {
         std::fprintf(stderr, "[producer] WARNING: mlockall failed (need CAP_SYS_RESOURCE or root)\n");
     }
-    if (cfg.rt.require_rt) {
-        if (!set_fifo(cfg.rt.producer_prio)) {
-            std::fprintf(stderr, "[producer] FATAL: Failed setting SCHED_FIFO %d (need CAP_SYS_NICE or root)\n",
+    if (!set_fifo(cfg.rt.producer_prio)) {
+        if (cfg.rt.require_rt) {
+            std::fprintf(stderr, "[producer] FATAL: Failed setting SCHED_FIFO %d (need CAP_SYS_NICE or root, or set require_rt=false in config)\n",
                          cfg.rt.producer_prio);
-            if (cfg.rt.require_rt) {
-                g_running.store(false, std::memory_order_relaxed);
-            }
+            assembler.stop();
+            if (assembler_thread.joinable()) assembler_thread.join();
+            if (log_drain_thread.joinable()) log_drain_thread.join();
+            shm_destroy(SHM_AUDIO, audio_shm, audio_shm_sz);
+            shm_destroy(SHM_STATS, stats_shm, STATS_SHM_SIZE);
+            shm_destroy(SHM_WINDOW, window_shm, WINDOW_SHM_SIZE);
+            return 1;
+        } else {
+            std::fprintf(stderr, "[producer] WARNING: Could not set SCHED_FIFO %d; running with standard priority (require_rt=false)\n",
+                         cfg.rt.producer_prio);
         }
     }
 

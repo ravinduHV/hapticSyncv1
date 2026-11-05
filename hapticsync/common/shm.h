@@ -52,6 +52,24 @@ inline void* shm_open_readonly(const char* name, size_t size) {
 #endif
 }
 
+/// Open an existing shared memory segment read-write (or create if not existing).
+inline void* shm_open_or_create(const char* name, size_t size) {
+#ifdef __linux__
+    int fd = ::shm_open(name, O_CREAT | O_RDWR, 0666);
+    if (fd < 0) { perror("shm_open or create"); return nullptr; }
+    if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
+        // may already be truncated
+    }
+    void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) { perror("mmap or create"); return nullptr; }
+    return p;
+#else
+    (void)name;
+    return std::calloc(1, size);
+#endif
+}
+
 /// Open an existing shared memory segment read-write.
 inline void* shm_open_readwrite(const char* name, size_t size) {
 #ifdef __linux__

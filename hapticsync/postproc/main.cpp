@@ -59,7 +59,7 @@ int main(int argc, char* argv[]) {
     EventRingWriter event_writer;
     event_writer.init(event_shm, cfg.events.slot_count);
 
-    void* stats_shm = shm_open_readwrite(SHM_STATS, STATS_SHM_SIZE);
+    void* stats_shm = shm_open_or_create(SHM_STATS, STATS_SHM_SIZE);
     StatsBlock* stats = stats_shm ? reinterpret_cast<StatsBlock*>(stats_shm) : nullptr;
 
     // 3. Load Vocab

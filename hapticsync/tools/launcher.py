@@ -88,6 +88,20 @@ def main():
     for s in (s_assem, s_infer, s_post, s_result):
         os.set_inheritable(s.fileno(), True)
 
+    # Ensure vocab.json exists before post-process starts
+    vocab_file = cfg.get("model", {}).get("vocab_json", "vocab.json")
+    if not os.path.exists(vocab_file):
+        id2phoneme = {
+            1: "aa", 2: "ae", 3: "ah", 4: "aw", 5: "ay", 6: "b", 7: "ch", 8: "d", 9: "dh",
+            10: "dx", 11: "eh", 12: "er", 13: "ey", 14: "f", 15: "g", 16: "h#", 17: "hh",
+            18: "ih", 19: "iy", 20: "jh", 21: "k", 22: "l", 23: "m", 24: "n", 25: "ng",
+            26: "ow", 27: "oy", 28: "p", 29: "r", 30: "s", 31: "sh", 32: "t", 33: "th",
+            34: "uh", 35: "uw", 36: "v", 37: "w", 38: "y", 39: "z", 0: "|", 40: "[UNK]", 41: "[PAD]"
+        }
+        with open(vocab_file, "w") as f:
+            json.dump({str(k): v for k, v in id2phoneme.items()}, f, indent=2)
+        print(f"[launcher] Created {vocab_file}")
+
     env_base = os.environ.copy()
 
     # 3. Start Post-Process (CPU 3)
