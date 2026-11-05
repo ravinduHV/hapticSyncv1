@@ -26,6 +26,10 @@ def parse_args():
                         help="WAV file path to stream through simulator (required if --sim-source=wav)")
     parser.add_argument("--loopback", action="store_true",
                         help="Configure audio source to ALSA loopback (hw:Loopback,1,0)")
+    parser.add_argument("--web", action="store_true",
+                        help="Run full web server on Raspberry Pi (port 5000) instead of lightweight publisher (port 5555)")
+    parser.add_argument("--telem-port", type=int, default=None,
+                        help="Override telemetry port (default: 5555 for publisher, 5000 for web)")
     return parser.parse_args()
 
 args = parse_args()
@@ -232,14 +236,24 @@ def main():
         cleanup()
         sys.exit(1)
 
-    # 7. Start Telemetry Dashboard (CPU 0)
-    if cfg.get("telemetry", {}).get("dashboard", True):
+    # 7. Start Telemetry Service (CPU 0)
+    if cfg.get("telemetry", {}).get("enabled", True) and cfg.get("telemetry", {}).get("dashboard", True):
         hk_cpus = ",".join(str(c) for c in cfg.get("cpus", {}).get("housekeeping", [0]))
-        telem_cmd = [sys.executable, "telemetry/main.py", RUNTIME_CONFIG_PATH]
+        use_web = args.web or cfg.get("telemetry", {}).get("mode") == "web"
+        port = args.telem_port or (5000 if use_web else 5555)
+
+        if use_web:
+            telem_script = "telemetry/main.py"
+            telem_label = f"local web dashboard (port {port})"
+        else:
+            telem_script = "telemetry/publisher.py"
+            telem_label = f"ultra-lightweight telemetry publisher (port {port})"
+
+        telem_cmd = [sys.executable, telem_script, RUNTIME_CONFIG_PATH]
         if sys.platform.startswith("linux"):
             telem_cmd = ["taskset", "-c", hk_cpus] + telem_cmd
 
-        print(f"[launcher] Spawning telemetry service on CPU(s) {hk_cpus}...")
+        print(f"[launcher] Spawning {telem_label} on CPU(s) {hk_cpus}...")
         procs["telemetry"] = subprocess.Popen(telem_cmd, env=env_base)
 
     print("[launcher] All processes running. Press Ctrl-C to terminate.\n")

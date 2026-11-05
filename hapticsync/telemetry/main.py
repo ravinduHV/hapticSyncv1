@@ -89,38 +89,56 @@ def decode_throttled(val_str):
     return flags
 
 
-def is_simulator_running():
-    try:
-        out = subprocess.check_output(["pgrep", "-f", "i2s_mic_simulator.py"], text=True)
-        return len(out.strip().splitlines()) > 0
-    except Exception:
-        return False
+_cached_sim_status = False
+_last_sim_check = 0.0
 
+def is_simulator_running():
+    global _cached_sim_status, _last_sim_check
+    now = time.time()
+    if now - _last_sim_check > 5.0:
+        _last_sim_check = now
+        try:
+            out = subprocess.check_output(["pgrep", "-f", "i2s_mic_simulator.py"], text=True)
+            _cached_sim_status = len(out.strip().splitlines()) > 0
+        except Exception:
+            _cached_sim_status = False
+    return _cached_sim_status
+
+
+_cached_sys_info = {"temp_c": 0.0, "freq_mhz": 2400, "throttled": "0x0", "throttled_flags": []}
+_last_sys_check = 0.0
 
 def read_system_telemetry():
-    info = {"temp_c": 0.0, "freq_mhz": 2400, "throttled": "0x0", "throttled_flags": []}
+    global _cached_sys_info, _last_sys_check
+    now = time.time()
+
+    # Fast sysfs temp read (<1us, no fork/exec)
     try:
-        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
-        info["temp_c"] = float(out.replace("temp=", "").replace("'C\n", "").strip())
+        if os.path.exists("/sys/class/thermal/thermal_zone0/temp"):
+            with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                _cached_sys_info["temp_c"] = round(int(f.read().strip()) / 1000.0, 1)
     except Exception:
         pass
 
-    try:
-        out = subprocess.check_output(["vcgencmd", "get_throttled"], text=True)
-        val = out.strip().replace("throttled=", "")
-        info["throttled"] = val
-        info["throttled_flags"] = decode_throttled(val)
-    except Exception:
-        pass
+    # Slow check for vcgencmd throttled & clock (at most once every 5 seconds)
+    if now - _last_sys_check > 5.0:
+        _last_sys_check = now
+        try:
+            out = subprocess.check_output(["vcgencmd", "get_throttled"], text=True)
+            val = out.strip().replace("throttled=", "")
+            _cached_sys_info["throttled"] = val
+            _cached_sys_info["throttled_flags"] = decode_throttled(val)
+        except Exception:
+            pass
 
-    try:
-        out = subprocess.check_output(["vcgencmd", "measure_clock", "arm"], text=True)
-        hz = int(out.strip().split("=")[1])
-        info["freq_mhz"] = round(hz / 1e6)
-    except Exception:
-        pass
+        try:
+            out = subprocess.check_output(["vcgencmd", "measure_clock", "arm"], text=True)
+            hz = int(out.strip().split("=")[1])
+            _cached_sys_info["freq_mhz"] = round(hz / 1e6)
+        except Exception:
+            pass
 
-    return info
+    return _cached_sys_info
 
 
 def analyze_bottlenecks(stats, sys_info, cfg):

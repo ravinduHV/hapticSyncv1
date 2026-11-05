@@ -33,9 +33,10 @@
     "min_confidence": 0.0
   },
   "telemetry": {
+    "mode": "publisher",
     "rate_hz": 10,
     "dashboard": true,
-    "port": 5000
+    "port": 5555
   }
 }
 
