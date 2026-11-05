@@ -1,0 +1,13 @@
+{
+  "_comment": "Filled by Phase A bench_model.py — do not edit manually",
+  "a": null,
+  "b": null,
+  "rtf_curve": {},
+  "measured_at": null,
+  "config": {
+    "cpus_model": [2],
+    "torch_threads": 1,
+    "inference_mode": true
+  }
+}
+

@@ -1,0 +1,13 @@
+# BinaryBrains & Haptic-Sync Python Dependencies
+torch
+torchaudio
+transformers
+numpy
+scipy
+soundfile
+sounddevice
+soxr
+flask
+flask-socketio
+pytest
+
