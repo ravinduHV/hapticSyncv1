@@ -11,6 +11,7 @@ import time
 import subprocess
 
 config_path = sys.argv[1] if len(sys.argv) > 1 else "config/hapticsync.json"
+print(f"[bench] Loading configuration from: {config_path}")
 try:
     with open(config_path, "r") as f:
         cfg = json.load(f)
@@ -182,8 +183,9 @@ def main():
         "policy_recommendation": policy_choice,
         "measured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "config": {
-            "cpus_model": [2],
-            "torch_threads": 1,
+            "config_file": config_path,
+            "cpus_model": model_cpus,
+            "torch_threads": len(model_cpus),
             "inference_mode": True
         }
     }
