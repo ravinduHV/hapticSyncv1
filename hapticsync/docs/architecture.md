@@ -7,17 +7,17 @@ The pipeline extracts phoneme event streams with microsecond-level timing metada
 ## Core Pinning and Process Model
 
 ```
-CPU 0: Housekeeping (systemd, non-RT IRQs, telemetry dashboard, launcher)
-CPU 1: Capture & Pre-model (Audio IRQ, Producer RT thread FIFO 50, Assembler SCHED_OTHER)
-CPU 2: Model Inference (Python 3 + PyTorch, 1 thread, SCHED_OTHER)
-CPU 3: Post-processing (CTC collapse, overlap merge, event ring writer)
+CPU 0: Housekeeping (systemd, network IRQs, telemetry daemon <0.5% CPU, launcher)
+CPU 1: Capture, Pre-model & Post-model (Audio IRQ, Producer RT FIFO 50, Assembler, Postproc CTC collapse)
+CPU 2: Model Worker Thread 0 (PyTorch Wav2Vec2 forward pass)
+CPU 3: Model Worker Thread 1 (PyTorch Wav2Vec2 forward pass)
 ```
 
 ## Transport Architecture
 - **Audio Stream**: Producer writes interleaved audio to lock-free single-writer shared memory ring (`/hapticsync_audio`).
 - **Control Handshakes**: Double-buffered window slots (`/hapticsync_window`) and non-blocking `AF_UNIX` `SOCK_SEQPACKET` socketpair datagrams between C++ assembler and Python inference.
 - **Phoneme Event Stream**: Post-processor commits non-blank CTC run onsets to a sequence-numbered event ring (`/hapticsync_events`).
-- **Telemetry**: Read-only atomic stats block (`/hapticsync_stats`) read by CPU 0 dashboard without interfering with the RT threads.
+- **Telemetry**: Read-only atomic stats block (`/hapticsync_stats`) read by CPU 0 daemon without interfering with the RT threads. Streamed via direct TCP socket (port 5555) or MQTT (port 1883).
 
 ## Algorithms
 1. **Frame Grid Alignment**:

@@ -1,10 +1,12 @@
 {
   "cpus": {
     "housekeeping": [
-      0
+      0,
+      1
     ],
     "producer": 1,
     "model": [
+      0,
       2,
       3
     ],

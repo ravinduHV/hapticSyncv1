@@ -1,6 +1,20 @@
 {
-  "cpus": { "housekeeping": [0], "producer": 1, "model": [2, 3], "post": 1 },
-  "rt": { "require_rt": false, "irq_thread_prio": 60, "producer_prio": 50 },
+  "cpus": {
+    "housekeeping": [
+      0
+    ],
+    "producer": 1,
+    "model": [
+      2,
+      3
+    ],
+    "post": 1
+  },
+  "rt": {
+    "require_rt": false,
+    "irq_thread_prio": 60,
+    "producer_prio": 50
+  },
   "audio": {
     "source": "loopback",
     "alsa_device": "hw:Loopback,1,0",
@@ -39,4 +53,3 @@
     "port": 5555
   }
 }
-

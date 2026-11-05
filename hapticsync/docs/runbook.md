@@ -39,18 +39,52 @@ python3 tools/bench_model.py
 This generates `config/bench.json` which determines the optimal window policy (`catchup` vs. `latest`).
 
 ## 5. Running the Complete Pipeline
-Launch the pipeline with the supervisor:
-```bash
-python3 tools/launcher.py
-```
 
-Monitor live phoneme events in another terminal:
-```bash
-python3 tools/phoneme_tail.py
-```
+### Mode A: Lightweight Telemetry Publisher (Recommended for RPi)
+Offloads web serving, WebSockets, and UI rendering entirely to your PC:
 
-Access the live browser dashboard:
+1. **Start pipeline on Raspberry Pi (with simulated audio or real mic):**
+   ```bash
+   # Using I2S software simulator:
+   python3 tools/launcher.py --sim
+
+   # Or using real hardware I2S mic:
+   python3 tools/launcher.py
+   ```
+
+2. **Run Web Dashboard locally on your PC:**
+   ```bash
+   python hapticsync/pc_dashboard.py --host <RASPBERRY_PI_IP>
+   ```
+   Open `http://localhost:5000` (Phoneme Monitor) or `http://localhost:5000/pipeline` (Pipeline Health).
+
+### Mode B: MQTT Streaming Mode
+Streams telemetry events to an MQTT broker running on your PC:
+
+1. **Start MQTT broker on your PC:**
+   ```bash
+   docker compose up -d
+   ```
+2. **Start dashboard on your PC:**
+   ```bash
+   python hapticsync/pc_dashboard.py --mqtt --broker localhost
+   ```
+3. **Launch pipeline on Raspberry Pi:**
+   ```bash
+   python3 tools/launcher.py --sim --mqtt --mqtt-broker <YOUR_PC_IP>
+   ```
+
+### Mode C: Legacy On-Pi Web Server
+Runs the Flask web server directly on Raspberry Pi CPU 0 (note: CPU load will be higher):
+```bash
+python3 tools/launcher.py --web --sim
 ```
-http://<raspberry-pi-ip>:5000
+Access directly at `http://<RASPBERRY_PI_IP>:5000`.
+
+## 6. Runtime Tuning & Custom Configurations
+Refer to `docs/configuration_and_tuning.md` for full parameter definitions.
+To run with a custom profile (e.g. low-latency 500 ms window):
+```bash
+python3 tools/launcher.py config/low_latency.json --sim
 ```
 
