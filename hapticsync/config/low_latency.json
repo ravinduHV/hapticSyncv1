@@ -1,0 +1,55 @@
+{
+  "cpus": {
+    "housekeeping": [
+      0
+    ],
+    "producer": 1,
+    "model": [
+      2,
+      3
+    ],
+    "post": 1
+  },
+  "rt": {
+    "require_rt": false,
+    "irq_thread_prio": 60,
+    "producer_prio": 50
+  },
+  "audio": {
+    "source": "loopback",
+    "alsa_device": "hw:Loopback,1,0",
+    "rate": 16000,
+    "channels": 2,
+    "period_frames": 160,
+    "buffer_periods": 8,
+    "channel_mode": "mean",
+    "wav_path": null,
+    "ring_seconds": 60
+  },
+  "window": {
+    "policy": "auto",
+    "trim_left_frames": 3,
+    "trim_right_frames": 3,
+    "min_window_ms": 300,
+    "max_window_ms": 4000,
+    "min_new_ms": 200,
+    "fixed_window_ms": 400,
+    "normalize_in": "cpp"
+  },
+  "model": {
+    "checkpoint": "./model/",
+    "blank_id": 41,
+    "vocab_json": "vocab.json",
+    "quantize": "int8"
+  },
+  "events": {
+    "slot_count": 1024,
+    "min_confidence": 0.0
+  },
+  "telemetry": {
+    "mode": "publisher",
+    "rate_hz": 10,
+    "dashboard": true,
+    "port": 5555
+  }
+}
