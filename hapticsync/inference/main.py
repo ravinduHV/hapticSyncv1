@@ -96,15 +96,36 @@ def warmup(model):
     print("[inference] Warmup complete.")
 
 
+def resolve_model_path(path: str) -> str:
+    """Find local model directory or return original path."""
+    candidates = [
+        path,
+        os.path.abspath(path),
+        os.path.join("..", path.lstrip("./")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "model")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model")),
+    ]
+    for c in candidates:
+        if os.path.isdir(c) and (os.path.exists(os.path.join(c, "config.json")) or os.path.exists(os.path.join(c, "pytorch_model.bin"))):
+            return c
+    return path
+
+
 def main():
     checkpoint = cfg.get("model", {}).get("checkpoint", "./model/")
+    resolved_checkpoint = resolve_model_path(checkpoint)
     blank_id = cfg.get("model", {}).get("blank_id", 41)
     vocab_file = cfg.get("model", {}).get("vocab_json", "vocab.json")
 
     export_vocab(vocab_file)
 
-    print(f"[inference] Loading Wav2Vec2 model from {checkpoint}...")
-    model = Wav2Vec2ForCTC.from_pretrained(checkpoint)
+    if not os.path.isdir(resolved_checkpoint):
+        print(f"\n[inference] ERROR: Model directory not found at '{checkpoint}' (or '../model')!", file=sys.stderr)
+        print("Per README Step 01, ensure your 'model' directory is present.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[inference] Loading Wav2Vec2 model from {resolved_checkpoint}...")
+    model = Wav2Vec2ForCTC.from_pretrained(resolved_checkpoint)
     model.eval()
 
     run_startup_assertions(model, checkpoint, blank_id)

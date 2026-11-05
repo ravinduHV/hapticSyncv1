@@ -5,12 +5,27 @@ Takes a WAV file, runs the full-audio Wav2Vec2-CTC inference, applies CTC greedy
 and outputs a reference transcript JSON containing phonemes with timestamps.
 """
 
+import os
 import sys
 import json
 import torch
 import soundfile as sf
 import numpy as np
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
+
+def resolve_model_path(path: str) -> str:
+    candidates = [
+        path,
+        os.path.abspath(path),
+        os.path.join("..", path.lstrip("./")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "model")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model")),
+    ]
+    for c in candidates:
+        if os.path.isdir(c) and os.path.exists(os.path.join(c, "config.json")):
+            return c
+    return path
 
 
 def main():
@@ -20,7 +35,7 @@ def main():
 
     wav_path = sys.argv[1]
     out_path = sys.argv[2]
-    checkpoint = sys.argv[3] if len(sys.argv) > 3 else "./model/"
+    checkpoint = resolve_model_path(sys.argv[3] if len(sys.argv) > 3 else "./model/")
 
     print(f"[ref_decode] Loading model from {checkpoint}...")
     model = Wav2Vec2ForCTC.from_pretrained(checkpoint)

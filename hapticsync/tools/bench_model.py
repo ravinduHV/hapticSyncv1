@@ -41,14 +41,37 @@ def get_system_telemetry():
     return t_str, th_str
 
 
+def resolve_model_path(path: str) -> str:
+    """Find local model directory or return original path."""
+    candidates = [
+        path,
+        os.path.abspath(path),
+        os.path.join("..", path.lstrip("./")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "model")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model")),
+    ]
+    for c in candidates:
+        if os.path.isdir(c) and (os.path.exists(os.path.join(c, "config.json")) or os.path.exists(os.path.join(c, "pytorch_model.bin"))):
+            return c
+    return path
+
+
 def main():
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config/hapticsync.json"
     with open(config_path, "r") as f:
         cfg = json.load(f)
 
     checkpoint = cfg.get("model", {}).get("checkpoint", "./model/")
-    print(f"[bench] Loading model from {checkpoint}...")
-    model = Wav2Vec2ForCTC.from_pretrained(checkpoint)
+    resolved_checkpoint = resolve_model_path(checkpoint)
+
+    if not os.path.isdir(resolved_checkpoint):
+        print(f"\n[bench] ERROR: Model directory not found at '{checkpoint}' (or '../model')!", file=sys.stderr)
+        print("Per README Step 01, ensure your 'model' directory is present.", file=sys.stderr)
+        print("If it is located in the parent directory, run:\n  ln -s ../model ./model\n", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[bench] Loading model from {resolved_checkpoint}...")
+    model = Wav2Vec2ForCTC.from_pretrained(resolved_checkpoint)
     model.eval()
 
     sample_rate = 16000
