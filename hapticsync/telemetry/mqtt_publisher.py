@@ -420,6 +420,7 @@ def main():
                 pipeline_payload = {
                     "stats": st,
                     "system": sys_info,
+                    "config": cfg,
                     "source": {
                         "source_type": cfg.get("audio", {}).get("source", "loopback"),
                         "device": cfg.get("audio", {}).get("alsa_device", "hw:Loopback,1,0"),

@@ -525,25 +525,25 @@ html,body{min-height:100%;background:var(--bg0);color:var(--text0);font-family:'
           <span style="font-size:11px;color:var(--text2)">Taskset Pinning</span>
         </div>
         <div class="core-map">
-          <div class="core-card">
+          <div class="core-card" id="core-card-0">
             <span class="core-num">CPU 0</span>
-            <span class="core-role">Housekeep</span>
-            <span class="core-status">Telemetry / OS</span>
+            <span class="core-role" id="core-role-0">Housekeep</span>
+            <span class="core-status" id="core-status-0">Telemetry / OS</span>
           </div>
-          <div class="core-card">
+          <div class="core-card" id="core-card-1">
             <span class="core-num">CPU 1</span>
-            <span class="core-role">Pre & Post</span>
-            <span class="core-status">Capture / PostProc</span>
+            <span class="core-role" id="core-role-1">Pre & Post</span>
+            <span class="core-status" id="core-status-1">Capture / PostProc</span>
           </div>
-          <div class="core-card">
+          <div class="core-card" id="core-card-2">
             <span class="core-num">CPU 2</span>
-            <span class="core-role">Model A</span>
-            <span class="core-status">PyTorch Worker</span>
+            <span class="core-role" id="core-role-2">Model A</span>
+            <span class="core-status" id="core-status-2">PyTorch Worker</span>
           </div>
-          <div class="core-card">
+          <div class="core-card" id="core-card-3">
             <span class="core-num">CPU 3</span>
-            <span class="core-role">Model B</span>
-            <span class="core-status">PyTorch Worker</span>
+            <span class="core-role" id="core-role-3">Model B</span>
+            <span class="core-status" id="core-status-3">PyTorch Worker</span>
           </div>
         </div>
       </div>
@@ -594,6 +594,7 @@ let historyFlow = { sent: [], done: [], drop: [] };
 let historyLag = { lag: [], infer: [] };
 let lastStats = null;
 let lastEvents = [];
+let lastConfig = null;
 let pipelineStartWall = null;   // PC wall-clock time when pipeline start_ns first seen
 let lastStartNs = 0;            // last seen start_ns from SHM
 
@@ -630,13 +631,18 @@ function renderArchitectureFlow() {
 
   const st = lastStats || {};
   const isBusy = !!st.model_busy;
+  const cfg = lastConfig || {};
+  const cpus = cfg.cpus || {};
+  const modelCpus = Array.isArray(cpus.model) ? cpus.model.join(',') : (cpus.model || '2,3');
+  const winMs = cfg.window && cfg.window.fixed_window_ms ? cfg.window.fixed_window_ms : 1000;
+  const prodCpu = cpus.producer != null ? cpus.producer : 1;
 
   // Node Centers
   const nodes = [
-    { id: 'src', x: W * 0.09, y: H * 0.50, title: '🎙️ ALSA In', sub: 'hw:Loopback,1', tag: 'CPU 1', color: '#00d4ff', val: '160 s/p' },
+    { id: 'src', x: W * 0.09, y: H * 0.50, title: '🎙️ ALSA In', sub: 'hw:Loopback,1', tag: `CPU ${prodCpu}`, color: '#00d4ff', val: '160 s/p' },
     { id: 'ring', x: W * 0.29, y: H * 0.50, title: '🔄 Audio Ring', sub: 'SHM 60s Buffer', tag: 'SPSC', color: '#3b82f6', val: (st.periods_captured || 0).toLocaleString() + ' p' },
-    { id: 'assem', x: W * 0.50, y: H * 0.50, title: '🪟 Assembler', sub: 'Window Tiler', tag: 'CPU 1', color: '#10b981', val: (st.windows_sent || 0) + ' sent' },
-    { id: 'model', x: W * 0.71, y: H * 0.50, title: '🧠 Wav2Vec2', sub: 'PyTorch 2-Core', tag: 'CPU 2,3', color: isBusy ? '#00d4ff' : '#a855f7', val: st.last_infer_ms ? st.last_infer_ms.toFixed(0) + ' ms' : '— ms' },
+    { id: 'assem', x: W * 0.50, y: H * 0.50, title: '🪟 Assembler', sub: `${winMs}ms Window`, tag: `CPU ${prodCpu}`, color: '#10b981', val: (st.windows_sent || 0) + ' sent' },
+    { id: 'model', x: W * 0.71, y: H * 0.50, title: '🧠 Wav2Vec2', sub: `PyTorch (${modelCpus.split(',').length}-Core)`, tag: `CPU ${modelCpus}`, color: isBusy ? '#00d4ff' : '#a855f7', val: st.last_infer_ms ? st.last_infer_ms.toFixed(0) + ' ms' : '— ms' },
     { id: 'post', x: W * 0.91, y: H * 0.50, title: '🔤 Event Ring', sub: 'CTC Collapse', tag: 'POSIX SHM', color: '#10b981', val: (st.events_emitted || 0).toLocaleString() + ' evts' }
   ];
 
@@ -829,6 +835,87 @@ function updateDashboard(data) {
   const src = data.source || {};
   const bneck = data.bottlenecks || {};
   lastStats = st;
+  if (data.config) {
+    lastConfig = data.config;
+    const c = data.config;
+    const win = c.window || {};
+    const cpus = c.cpus || {};
+    const audio = c.audio || {};
+
+    // A. Window Anatomy Updates
+    const winMs = win.fixed_window_ms || 1000;
+    const rate = audio.rate || 16000;
+    const winSamps = Math.round((winMs * rate) / 1000);
+    const trimL = win.trim_left_frames != null ? win.trim_left_frames : 3;
+    const trimR = win.trim_right_frames != null ? win.trim_right_frames : 3;
+    const totalFrames = Math.floor(winSamps / 320);
+    const commitFrames = Math.max(totalFrames - (trimL + trimR), 0);
+    const commitMs = commitFrames * 20;
+    const trimLMs = trimL * 20;
+    const trimRMs = trimR * 20;
+    const trimLPct = Math.min((trimLMs / winMs) * 100, 30).toFixed(1);
+    const trimRPct = Math.min((trimRMs / winMs) * 100, 30).toFixed(1);
+
+    if (document.getElementById('anat-win-ms')) document.getElementById('anat-win-ms').textContent = winMs;
+    if (document.getElementById('anat-win-samps')) document.getElementById('anat-win-samps').textContent = winSamps.toLocaleString();
+    if (document.getElementById('anat-trim-l')) {
+      const el = document.getElementById('anat-trim-l');
+      el.style.width = trimLPct + '%';
+      el.textContent = `TRIM L: ${trimLMs}ms`;
+    }
+    if (document.getElementById('anat-commit')) {
+      document.getElementById('anat-commit').innerHTML = `<span>🟩 COMMITTED CORE: ${commitMs}ms (${commitFrames} frames @ 20ms)</span><span style="font-size:10px;opacity:.7">→ Posix Event Ring</span>`;
+    }
+    if (document.getElementById('anat-trim-r')) {
+      const el = document.getElementById('anat-trim-r');
+      el.style.width = trimRPct + '%';
+      el.textContent = `TRIM R: ${trimRMs}ms`;
+    }
+    if (document.getElementById('wf-active-policy')) {
+      document.getElementById('wf-active-policy').textContent = `${(win.policy || 'auto').toUpperCase()} POLICY`;
+    }
+
+    // B. CPU Core Pinning Mapping
+    const modelCpus = Array.isArray(cpus.model) ? cpus.model : [cpus.model != null ? cpus.model : 2];
+    const prodCpu = cpus.producer != null ? cpus.producer : 1;
+    const postCpu = cpus.post != null ? cpus.post : 1;
+    const hkCpus = Array.isArray(cpus.housekeeping) ? cpus.housekeeping : [cpus.housekeeping != null ? cpus.housekeeping : 0];
+
+    for (let core = 0; core < 4; core++) {
+      const roleEl = document.getElementById(`core-role-${core}`);
+      const statusEl = document.getElementById(`core-status-${core}`);
+      if (!roleEl || !statusEl) continue;
+
+      const roles = [];
+      if (hkCpus.includes(core)) roles.push('Telemetry / OS');
+      if (prodCpu === core) roles.push('Capture (ALSA)');
+      if (postCpu === core) roles.push('PostProc (CTC)');
+      if (modelCpus.includes(core)) roles.push('PyTorch Model');
+
+      if (modelCpus.includes(core)) {
+        roleEl.textContent = 'Model Worker';
+        roleEl.style.color = 'var(--cyan)';
+        statusEl.textContent = roles.join(', ');
+      } else if (prodCpu === core || postCpu === core) {
+        roleEl.textContent = 'Audio Pipeline';
+        roleEl.style.color = 'var(--green)';
+        statusEl.textContent = roles.join(', ');
+      } else if (hkCpus.includes(core)) {
+        roleEl.textContent = 'Housekeeping';
+        roleEl.style.color = 'var(--text2)';
+        statusEl.textContent = roles.join(', ');
+      } else {
+        roleEl.textContent = 'Idle Core';
+        roleEl.style.color = 'var(--text2)';
+        statusEl.textContent = 'Unallocated';
+      }
+    }
+
+    // C. Update Hop 3 Assembler slice size
+    if (document.getElementById('hop-val-assem')) {
+      document.getElementById('hop-val-assem').textContent = `${winSamps.toLocaleString()} s (${winMs}ms)`;
+    }
+  }
 
   const isLive = data.connected_to_rpi !== false;
   const netDot = document.getElementById('net-dot');

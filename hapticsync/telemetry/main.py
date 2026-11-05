@@ -420,6 +420,7 @@ def api_pipeline():
     return jsonify({
         "stats": st,
         "system": sys_info,
+        "config": cfg,
         "source": src_info,
         "bottlenecks": bneck_info,
         "waveform": recent_wf,
